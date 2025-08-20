@@ -1,11 +1,50 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
+from celery.result import AsyncResult
+from back_end.celery_app import celery_app
+from .agents.experimentation.models import TwoSampleInput, ExperimentOutput
+from .agents.experimentation.tasks import run_experiment_task
+from .agents.experimentation.explain import gpt5_explain_results 
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"message": "Back end for the Automated Machine learning Research Reproducability Assistant!"}
+    return {"message": "Back end for the Automated Machine learning Research Reproducibility Assistant!"}
 
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: str = None):
-    return {"item_id": item_id, "query": q}
+
+@app.post("/experiment/")
+def run_experiment(input_data: TwoSampleInput):
+    """
+    Queue an experiment to run in the background with Celery.
+    """
+    task = run_experiment_task.delay(input_data.dict())
+    return {"status": "queued", "task_id": task.id}
+
+@app.get("/experiment/result/{task_id}")
+def get_experiment_result(task_id: str, explain: bool = Query(False)):
+    """
+    Fetch experiment result. If explain=True, also return GPT-5 interpretation.
+    """
+    task_result = AsyncResult(task_id, app=celery_app)
+
+    if not task_result.ready():
+        return {"status": "running"}
+
+    if task_result.failed():
+        return {"status": "failed", "error": str(task_result.result)}
+
+    result = task_result.result  # This is the ExperimentOutput dict
+
+    # If explanation is requested, send to GPT-5
+    explanation = None
+    if explain:
+        explanation = gpt5_explain_results(result)
+
+    return {
+        "status": "completed",
+        "result": result,
+        "explanation": explanation
+    }
