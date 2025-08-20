@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 import numpy as np
 import faiss
 from rank_bm25 import BM25Okapi
-from langchain_cohere import CohereEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from dotenv import load_dotenv
 
 from utils import chunk_text, extract_pdf_text, fetch_and_clean_url
@@ -16,8 +16,8 @@ from utils import chunk_text, extract_pdf_text, fetch_and_clean_url
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
-COHERE_API_KEY = os.getenv("COHERE_API_KEY")
-EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "embed-english-v3.0")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")
 PERSIST_DIR = os.getenv("RETRIEVER_PERSIST_DIR", "./persist")
 os.makedirs(PERSIST_DIR, exist_ok=True)
 EPS = 1e-12
@@ -35,9 +35,9 @@ class Chunk:
 
 class RetrieverEngine:
     def __init__(self):
-        if not COHERE_API_KEY:
-            raise RuntimeError("COHERE_API_KEY env var is required")
-        self.embeddings = CohereEmbeddings(model=EMBED_MODEL, cohere_api_key=COHERE_API_KEY)
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY env var is required")
+        self.embeddings = OpenAIEmbeddings(model=EMBED_MODEL, openai_api_key=OPENAI_API_KEY)
         self.dim = len(self.embeddings.embed_query("test"))
 
         # Separate FAISS indices and BM25 lists per source type
