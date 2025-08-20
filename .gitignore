@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.egg-info/
+*.egg
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Environment variables
+.env
+
+# Persisted indices / embeddings
+persist/
+
+# Logs
+*.log
