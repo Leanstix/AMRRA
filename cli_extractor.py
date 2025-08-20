@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 
-from core.contracts import RetrievalOutput
+from models import RetrievalOutput
 from extractor import run_extraction
 
 

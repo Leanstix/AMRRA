@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.contracts import Evidence, ExtractionError, ExtractionOutput, ReasonCode, RetrievalOutput
+from models import Evidence, ExtractionError, ExtractionOutput, ReasonCode, RetrievalOutput
 from extractor import run_extraction
 
 

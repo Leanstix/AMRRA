@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from core.contracts import ExtractionError, ExtractionOutput, RetrievalOutput
+from models import ExtractionError, ExtractionOutput, RetrievalOutput
 from extractor import run_extraction
 
 app = FastAPI()
