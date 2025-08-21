@@ -2,7 +2,7 @@ import numpy as np
 from .models import TwoSampleInput, ExperimentOutput
 from .stats import (
     ttest_from_raw, ttest_from_summary, chi2_from_contingency,
-    simulate_from_summary, plot_groups
+    simulate_from_summary, plot_groups, chi2_from_observed_expected
 )
 from .stats_extended import (
     anova_from_raw, linear_regression, logistic_regression,
@@ -26,11 +26,16 @@ def run_experiment(input_data: TwoSampleInput, with_ai: bool = False) -> Experim
     plots = []
 
     # ---------- Chi-square ----------
-    if data.test == "chi2" and data.contingency:
-        res = chi2_from_contingency(data.contingency, data.alpha)
-        res["effect_size"] = cramers_v(data.contingency)
-        res["test_used"] = "chi2"
-        quality_flags.append("chi2_with_cramers_v")
+    if data.test == "chi2":
+        if data.contingency:
+            res = chi2_from_contingency(data.contingency, data.alpha)
+            res["effect_size"] = cramers_v(data.contingency)
+            res["test_used"] = "chi2"
+            quality_flags.append("chi2_with_cramers_v")
+        elif data.groups_raw or (data.data and data.expected):
+            # Handle goodness-of-fit chi-square
+            res = chi2_from_observed_expected(data.data, data.expected, data.alpha)
+            res["test_used"] = "chi2_gof"
 
     # ---------- ANOVA ----------
     elif data.test == "anova" and data.groups_raw:

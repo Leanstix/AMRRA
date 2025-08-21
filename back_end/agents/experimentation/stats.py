@@ -99,6 +99,24 @@ def chi2_from_contingency(table, alpha=0.05, with_ai=False):
         result["gpt5_explanation"] = gpt5_explain_results(result)
     return result
 
+def chi2_from_observed_expected(observed, expected, alpha=0.05, with_ai=False):
+    chi2, p = stats.chisquare(f_obs=observed, f_exp=expected)
+    df = len(observed) - 1
+    result = {
+        "test_used": "Chi-square goodness-of-fit",
+        "p_value": float(p),
+        "effect_size": None,
+        "confidence_interval": None,
+        "estimate": float(chi2),
+        "df": float(df),
+        "conclusion": "Significant difference" if p < alpha else "No significant difference",
+        "method_notes": "Chi-square goodness-of-fit test."
+    }
+
+    if with_ai:
+        result["gpt5_explanation"] = gpt5_explain_results(result)
+    return result
+
 # ---------- Simulation (when defensible) ----------
 def simulate_from_summary(mean, sd, n, seed=123, with_ai=False):
     rng = np.random.default_rng(seed)

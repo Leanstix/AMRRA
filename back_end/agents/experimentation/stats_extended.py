@@ -3,27 +3,77 @@ import math
 from scipy import stats
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
+import pandas as pd
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from .explain import gpt5_explain_results
 
 # ---------- ANOVA (raw only) ----------
 def anova_from_raw(groups: list[np.ndarray], alpha=0.05, with_ai=False):
+    # Validate groups
+    if len(groups) < 2:
+        raise ValueError("At least two groups are required for ANOVA.")
+    if any(len(g) < 2 for g in groups):
+        raise ValueError("Each group must have at least two observations.")
+    
+    # Compute ANOVA
     f_stat, p = stats.f_oneway(*groups)
     k = len(groups)
     n = sum(len(g) for g in groups)
-    df_between, df_within = k-1, n-k
+    
+    # Degrees of freedom
+    df_between, df_within = k - 1, n - k
+    
+    # Compute effect size (eta squared)
+    all_data = np.concatenate(groups)
+    grand_mean = np.mean(all_data)
+    ss_between = sum(len(g) * (np.mean(g) - grand_mean) ** 2 for g in groups)
+    ss_total = sum((x - grand_mean) ** 2 for x in all_data)
+    eta_sq = ss_between / ss_total if ss_total > 0 else None
+    
+    # Confidence Intervals for group means
+    group_cis = []
+    for i, g in enumerate(groups):
+        mean = np.mean(g)
+        se = stats.sem(g)
+        t_crit = stats.t.ppf(1 - alpha/2, df=len(g) - 1)
+        ci_lower = mean - t_crit * se
+        ci_upper = mean + t_crit * se
+        group_cis.append({
+            "group": f"Group{i+1}",
+            "mean": float(mean),
+            "ci_lower": float(ci_lower),
+            "ci_upper": float(ci_upper)
+        })
+    
+    # Post-hoc Tukey HSD
+    group_labels = []
+    for i, g in enumerate(groups):
+        group_labels.extend([f"Group{i+1}"] * len(g))
+    tukey = pairwise_tukeyhsd(endog=all_data, groups=group_labels, alpha=alpha)
+    
+    # Convert Tukey results to DataFrame
+    tukey_df = pd.DataFrame(data=tukey._results_table.data[1:], columns=tukey._results_table.data[0])
+    tukey_results = tukey_df.to_dict(orient="records")
+    
+    # Conclusion
     conclusion = "Group means differ significantly" if p < alpha else "No significant differences"
+    
     result = {
         "test_used": "One-way ANOVA",
         "p_value": float(p),
-        "effect_size": None,  # eta^2 or omega^2 could be added
-        "confidence_interval": None,
+        "effect_size": eta_sq,
+        "confidence_interval": None,  # For overall ANOVA, not applicable
         "estimate": float(f_stat),
         "df": [df_between, df_within],
         "conclusion": conclusion,
-        "method_notes": "One-way ANOVA across k groups (raw data)."
+        "method_notes": f"One-way ANOVA across {k} groups (raw data).",
+        "group_confidence_intervals": group_cis,
+        "post_hoc": tukey_results
     }
+    
     if with_ai:
         result["gpt5_explanation"] = gpt5_explain_results(result)
+    
     return result
 
 # ---------- Regression (linear) ----------
