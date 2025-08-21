@@ -3,6 +3,6 @@ a reproducibility copilot for ML research. It ingests papers, extracts gaps, gen
 
 ## Extractor Agent
 
-- Run API: `uvicorn main_extractor:app --reload`
+- Run API: `uvicorn main:app --reload`
 - Run CLI: `python cli_extractor.py < input.json`
 - Run tests: `pytest -q`
