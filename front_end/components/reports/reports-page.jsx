@@ -1,3 +1,4 @@
+'use client'
 import React, { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ReportsDashboard } from "./reports-dashboard";
