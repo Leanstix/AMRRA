@@ -3,17 +3,14 @@ import os
 import uuid
 from fastapi import FastAPI, HTTPException, APIRouter, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Dict, Any, Union
+from typing import Union
 
-from model.retriever_model import ChunkOut, IngestRequest, RetrieveRequest
+from model.retriever_model import IngestRequest, RetrieveRequest
 from model.extractor_model import Evidence, RetrievalOutput, ExtractionOutput, ExtractionError
 from Agents.retriever import engine
 from Agents.extractor import run_extraction
-
 from utils import extract_pdf_text, fetch_and_clean_url
-from redis_client import get_cached_chunk as get_cached_text, set_cached_chunk as set_cached_text
-
+from redis_client import get_cached_chunk, set_cached_chunk
 
 # =========================================================
 # FastAPI setup
@@ -29,38 +26,36 @@ app.add_middleware(
 )
 
 # =========================================================
-# Helper for text extraction (async + Redis cache)
+# Helper for text extraction with Redis cache
 # =========================================================
 async def get_text_from_item(item):
-    key = item.doc_id or (item.url or item.file_path)
-    cached = await get_cached_text(key)
+    key = item.doc_id or item.url or item.file_path
+    cached = await get_cached_chunk(key)
     if cached:
-        return cached, {"source_type": "text" if item.text else "url" if item.url else "pdf"}
+        return cached, {"source_type": "text" if getattr(item, "text", None) else "url" if getattr(item, "url", None) else "pdf"}
 
-    text_data = ""
-    meta = {}
-    if item.text:
+    if getattr(item, "text", None):
         text_data = item.text.strip()
-        meta["source_type"] = "text"
-    elif item.url:
+        meta = {"source_type": "text"}
+    elif getattr(item, "url", None):
         raw = fetch_and_clean_url(item.url)
         text_data = " ".join([p.get("text", "") for p in raw]) if isinstance(raw, list) else raw or ""
-        meta.update({"url": item.url, "source_type": "url"})
-    elif item.file_path:
+        meta = {"source_type": "url", "url": item.url}
+    elif getattr(item, "file_path", None):
         raw = extract_pdf_text(item.file_path)
         text_data = " ".join([p.get("text", "") for p in raw]) if isinstance(raw, list) else raw or ""
-        meta.update({"file": item.file_path, "source_type": "pdf"})
+        meta = {"source_type": "pdf", "file": item.file_path}
     else:
         raise HTTPException(400, "Provide text, URL, or file_path.")
 
     if not text_data.strip():
         raise HTTPException(400, "Text content is empty.")
 
-    await set_cached_text(key, text_data)
+    await set_cached_chunk(key, text_data)
     return text_data, meta
 
 # =========================================================
-# FastAPI Routers
+# Routers
 # =========================================================
 retriever_router = APIRouter(prefix="/retriever", tags=["retriever"])
 extractor_router = APIRouter(prefix="/extractor", tags=["extractor"])
@@ -91,7 +86,6 @@ async def ingest(req: IngestRequest, background_tasks: BackgroundTasks):
                 "text": text_data,
                 "meta": meta,
             })
-
         for src, items in batch.items():
             if items:
                 engine.ingest_batch(items, source_type=src)
@@ -103,42 +97,52 @@ async def ingest(req: IngestRequest, background_tasks: BackgroundTasks):
 # --- Extractor endpoint ---
 @extractor_router.post("/run", response_model=Union[ExtractionOutput, ExtractionError])
 def run_extractor_endpoint(input_data: RetrievalOutput):
-    extraction_result = run_extraction(input_data)
+    return run_extraction(input_data)
 
-    if isinstance(extraction_result, ExtractionError):
-        return extraction_result
-
-    # Return the extractor output as-is
-    return extraction_result
-
-
-# --- Pipeline endpoint (updated) ---
+# --- Pipeline endpoint ---
 @pipeline_router.post("/run", response_model=Union[ExtractionOutput, ExtractionError])
 async def pipeline_run(req: RetrieveRequest):
     """
-    Retrieve top-k chunks matching the query across requested sources,
-    and send them to the extractor.
+    Retrieve top-k chunks matching query, clean & truncate, then send to extractor.
     """
-            # Normalize section_filter to list of sources
+    import re
+
     section_filters = req.section_filter
     if isinstance(section_filters, str):
-            # Split by comma and strip spaces
-            section_filters = [s.strip() for s in section_filters.split(",")]
+        section_filters = [s.strip() for s in section_filters.split(",")]
 
-    # Collect top chunks across all requested sources
     all_results = []
     for src in section_filters:
-        src_results = engine.retrieve(query=req.query, k=req.k, alpha=req.alpha, source_type=src)
-        all_results.extend(src_results)
+        all_results.extend(engine.retrieve(query=req.query, k=req.k, alpha=req.alpha, source_type=src))
 
     if not all_results:
         return ExtractionError(
             run_id=str(uuid.uuid4()),
             error="No chunks found matching the query",
-            reason_code="missing_data"
+            reason_code="MISSING_DATA"
         )
 
-    # Convert to Evidence for extractor
+    # Clean & truncate
+    cleaned_chunks = []
+    for c in all_results:
+        text = re.sub(r"(Cached - Similar pages.*|Search Preferences.*|Next Search.*)", "", c["text"], flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip()[:1000]
+        if text:
+            cleaned_chunks.append({
+                "chunk_id": c["chunk_id"],
+                "doc_id": c["doc_id"],
+                "title": c.get("title", ""),
+                "text": text,
+                "meta": c.get("meta", {})
+            })
+
+    if len(cleaned_chunks) < 3:
+        return ExtractionError(
+            run_id=str(uuid.uuid4()),
+            error="Need at least 3 non-empty evidence chunks",
+            reason_code="MISSING_DATA"
+        )
+
     evidence_chunks = [
         Evidence(
             chunk_id=c["chunk_id"],
@@ -146,24 +150,17 @@ async def pipeline_run(req: RetrieveRequest):
             text=c["text"],
             title=c.get("title"),
             meta=c.get("meta", {})
-        )
-        for c in all_results
+        ) for c in cleaned_chunks
     ]
 
     retrieval_output = RetrievalOutput(
         run_id=str(uuid.uuid4()),
         query=req.query,
         evidence_chunks=evidence_chunks,
-        provenance={"chunks_used": len(evidence_chunks)},
+        provenance={"chunks_used": len(evidence_chunks)}
     )
 
-    extraction_result = run_extraction(retrieval_output)
-    return extraction_result
-
-
-
-
-
+    return run_extraction(retrieval_output)
 
 # =========================================================
 # Register Routers

@@ -11,7 +11,7 @@ import faiss
 from rank_bm25 import BM25Okapi
 from dotenv import load_dotenv
 
-from utils import chunk_text  # Your chunking utility
+from utils import chunk_text
 from model.extractor_model import Evidence, RetrievalOutput
 
 # Optional embeddings
@@ -45,7 +45,7 @@ class Chunk:
 
 # ---------------- RETRIEVER ----------------
 class RetrieverEngine:
-    SOURCES = ("pdf", "url")  # Removed "text"
+    SOURCES = ("pdf", "url")
 
     def __init__(self):
         if OPENAI_API_KEY:
@@ -58,6 +58,7 @@ class RetrieverEngine:
 
         self.dim = len(self._embeddings.embed_query("dimension-check-phrase"))
         self.faiss_indices: Dict[str, faiss.IndexFlatIP] = {src: faiss.IndexFlatIP(self.dim) for src in self.SOURCES}
+
         self.chunks: Dict[str, List[Chunk]] = {src: [] for src in self.SOURCES}
         self._bm25: Dict[str, Optional[BM25Okapi]] = {src: None for src in self.SOURCES}
         self._texts_for_bm25: Dict[str, List[List[str]]] = {src: [] for src in self.SOURCES}
@@ -126,18 +127,18 @@ class RetrieverEngine:
                 texts.append(chunk.text)
                 new_chunks.append(chunk)
 
+        # Embeddings
         embeddings = self._embeddings.embed_documents(texts)
         for i, vec in enumerate(embeddings):
             new_chunks[i].vector = self._normalize_vector(np.array(vec, dtype=np.float32))
             self.faiss_indices[source_type].add(new_chunks[i].vector.reshape(1, -1))
 
-        self._texts_for_bm25[source_type].extend([c.tokens for c in new_chunks])
-        if self._bm25[source_type] is None:
-            self._bm25[source_type] = BM25Okapi([c.tokens for c in new_chunks])
-        else:
-            self._bm25[source_type].corpus.extend([c.tokens for c in new_chunks])
-
+        # Add chunks
         self.chunks[source_type].extend(new_chunks)
+
+        # Rebuild BM25
+        self._texts_for_bm25[source_type] = [c.tokens for c in self.chunks[source_type]]
+        self._bm25[source_type] = BM25Okapi(self._texts_for_bm25[source_type])
 
         return {
             "added_docs": len(items),
@@ -152,34 +153,22 @@ class RetrieverEngine:
 
         n_docs = len(self.chunks[source_type])
         qv = self._normalize_vector(np.array(self._embeddings.embed_query(query), dtype=np.float32)).reshape(1, -1)
-
         top_n = min(max(k * 5, 50), n_docs)
 
-        # --- FAISS retrieval ---
+        # FAISS
         D, I = self.faiss_indices[source_type].search(qv, top_n)
         vec_idx, vec_scores = I[0], D[0]
         valid = vec_idx < n_docs
         vec_idx, vec_scores = vec_idx[valid], vec_scores[valid]
 
-        # --- BM25 retrieval ---
-        if self._bm25[source_type]:
-            bm25_scores = np.array(self._bm25[source_type].get_scores(self._tokenize(query)))
-            bm25_idx = np.argsort(-bm25_scores)[:top_n]
-        else:
-            bm25_scores = np.zeros(n_docs)
-            bm25_idx = np.arange(min(top_n, n_docs))
+        # BM25
+        bm25_scores = np.array(self._bm25[source_type].get_scores(self._tokenize(query)))
+        bm25_idx = np.argsort(-bm25_scores)[:top_n]
 
-        # --- Combine indices ---
+        # Hybrid scoring
         cand_idx = np.unique(np.concatenate([vec_idx, bm25_idx]))
-        v = np.zeros(len(cand_idx))
-        b = np.zeros(len(cand_idx))
-
-        vec_map = {idx: score for idx, score in zip(vec_idx, vec_scores)}
-        bm25_map = {idx: score for idx, score in zip(bm25_idx, bm25_scores[bm25_idx])}
-        for i, idx in enumerate(cand_idx):
-            v[i] = vec_map.get(idx, 0.0)
-            b[i] = bm25_map.get(idx, 0.0)
-
+        v = np.array([vec_scores[list(vec_idx).index(idx)] if idx in vec_idx else 0.0 for idx in cand_idx])
+        b = np.array([bm25_scores[idx] if idx in bm25_idx else 0.0 for idx in cand_idx])
         hybrid_scores = alpha * v + (1 - alpha) * b
         order = np.argsort(-hybrid_scores)[:min(k, len(cand_idx))]
 

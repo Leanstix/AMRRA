@@ -4,6 +4,7 @@ from PyPDF2 import PdfReader
 from collections import Counter
 from bs4 import BeautifulSoup
 import requests
+import uuid
 
 # ------------------- Text Cleaning -------------------
 def clean_text(text: str) -> str:
@@ -26,47 +27,7 @@ def extract_keywords(text: str, top_n=5) -> List[str]:
 
 
 # ------------------- Text Chunking -------------------
-def chunk_text(
-    text: str,
-    chunk_size: int = 500,
-    chunk_overlap: int = 100,
-    doc_id: str = "",
-    title: str = None,
-    meta: Dict[str, Any] = None
-) -> List[Dict[str, Any]]:
-    """Split text into overlapping chunks with metadata and keywords."""
-    text = clean_text(text)
-    if not text:
-        return []
 
-    meta = meta or {}
-    chunks = []
-    start = 0
-    chunk_id = 0
-
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunk = text[start:end].strip()
-        if chunk:
-            chunk_meta = meta.copy()
-            chunk_meta.update({
-                "keywords": extract_keywords(chunk),
-                "chunk_index": chunk_id,
-            })
-            chunks.append({
-                "chunk_id": f"{doc_id}_{chunk_id}" if doc_id else str(chunk_id),
-                "doc_id": doc_id,
-                "title": title,
-                "text": chunk,
-                "score_bm25": 0.0,
-                "score_vec": 0.0,
-                "score_hybrid": 0.0,
-                "meta": chunk_meta
-            })
-        start += chunk_size - chunk_overlap
-        chunk_id += 1
-
-    return chunks
 
 
 # ------------------- PDF Extraction -------------------
@@ -116,3 +77,37 @@ def fetch_and_clean_url(url: str) -> str:
 
     text = soup.get_text(separator=" ")
     return clean_text(text)
+def extract_numbers(text: str) -> List[float]:
+    """
+    Extract numeric values from a chunk of text. Returns list of floats.
+    Handles integers, decimals, negative numbers.
+    """
+    matches = re.findall(r'-?\d+(?:\.\d+)?', text)
+    return [float(m) for m in matches]
+
+def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100,
+               doc_id: str = None, title: str = None, meta: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    """
+    Splits text into overlapping chunks with metadata.
+    Returns list of dicts: chunk_id, doc_id, text, meta
+    """
+    meta = meta or {}
+    tokens = text.split()
+    chunks = []
+    start = 0
+    while start < len(tokens):
+        end = min(start + chunk_size, len(tokens))
+        chunk_tokens = tokens[start:end]
+        chunk_text_str = " ".join(chunk_tokens)
+        chunk_meta = meta.copy()
+        chunk_meta["raw_numbers"] = extract_numbers(chunk_text_str)
+        chunk = {
+            "chunk_id": str(uuid.uuid4()),
+            "doc_id": doc_id or "unknown",
+            "title": title,
+            "text": chunk_text_str,
+            "meta": chunk_meta
+        }
+        chunks.append(chunk)
+        start += chunk_size - chunk_overlap
+    return chunks
