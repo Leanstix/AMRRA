@@ -100,7 +100,7 @@ def run_extractor_endpoint(input_data: RetrievalOutput):
     return run_extraction(input_data)
 
 # --- Pipeline endpoint ---
-@pipeline_router.post("/run", response_model=Union[ExtractionOutput, ExtractionError])
+@pipeline_router.post("/final", response_model=Union[ExtractionOutput, ExtractionError])
 async def pipeline_run(req: RetrieveRequest):
     """
     Retrieve top-k chunks matching query, clean & truncate, then send to extractor.
