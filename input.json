@@ -1,0 +1,9 @@
+﻿{
+  "run_id": "run-1",
+  "evidence_chunks": [
+    {"text": "Treatment A improves recovery rate compared to baseline.", "source": "paperA", "locator": "p.1"},
+    {"text": "Recovery rate measured as percentage.", "source": "paperB", "locator": "p.2"},
+    {"text": "Control group had lower mean recovery.", "source": "paperA", "locator": "p.3"},
+    {"text": "Variance appears equal across groups.", "source": "paperC", "locator": "p.4"}
+  ]
+}
