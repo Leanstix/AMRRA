@@ -1,4 +1,3 @@
-# retriever.py
 import os
 import uuid
 import pickle
@@ -106,6 +105,19 @@ class RetrieverEngine:
         norm = np.linalg.norm(v)
         return v / (norm + EPS)
 
+    @staticmethod
+    def _filter_irrelevant_numbers(text: str) -> str:
+        import re
+        # Drop ISBNs
+        text = re.sub(r"\b97[89][0-9]{10}\b", "", text)
+        # Drop product dimensions (cm, mm, inches, etc.)
+        text = re.sub(r"\b\d+(\.\d+)?\s?(cm|mm|inch|inches|kg|lbs)\b", "", text, flags=re.I)
+        # Drop ASINs / SKU-like codes
+        text = re.sub(r"\b[A-Z0-9]{8,}\b", "", text)
+        # Drop page numbers
+        text = re.sub(r"\bPage\s?\d+\b", "", text, flags=re.I)
+        return text.strip()
+
     # ---------------- Ingest ----------------
     def ingest_batch(self, items: List[Dict[str, Any]], source_type: str, chunk_size=500, chunk_overlap=100):
         if source_type not in self.SOURCES:
@@ -122,6 +134,9 @@ class RetrieverEngine:
         for it in items:
             chunk_data = chunk_text(it["text"], chunk_size, chunk_overlap, it["doc_id"], it.get("title"), it.get("meta", {}))
             for c in chunk_data:
+                c["text"] = self._filter_irrelevant_numbers(c["text"])
+                if not c["text"]:
+                    continue
                 chunk = Chunk(**c)
                 chunk.tokens = self._tokenize(chunk.text)
                 texts.append(chunk.text)
@@ -147,73 +162,106 @@ class RetrieverEngine:
         }
 
     # ---------------- Retrieval ----------------
-    def retrieve(self, query: str, k=5, alpha=0.5, source_type="pdf"):
+    def retrieve(self, query: str, k=5, alpha=0.5, source_type="pdf", doc_ids: Optional[List[str]] = None):
         if source_type not in self.SOURCES or not self.chunks[source_type]:
             return []
 
-        n_docs = len(self.chunks[source_type])
+        # Restrict to doc_ids if provided
+        if doc_ids:
+            candidates = [c for c in self.chunks[source_type] if c.doc_id in doc_ids]
+        else:
+            candidates = self.chunks[source_type]
+
+        if not candidates:
+            return []
+
+        n_docs = len(candidates)
         qv = self._normalize_vector(np.array(self._embeddings.embed_query(query), dtype=np.float32)).reshape(1, -1)
         top_n = min(max(k * 5, 50), n_docs)
 
-        # FAISS
-        D, I = self.faiss_indices[source_type].search(qv, top_n)
-        vec_idx, vec_scores = I[0], D[0]
-        valid = vec_idx < n_docs
-        vec_idx, vec_scores = vec_idx[valid], vec_scores[valid]
-
-        # BM25
-        bm25_scores = np.array(self._bm25[source_type].get_scores(self._tokenize(query)))
+        # BM25 scores
+        bm25 = BM25Okapi([c.tokens for c in candidates])
+        bm25_scores = np.array(bm25.get_scores(self._tokenize(query)))
         bm25_idx = np.argsort(-bm25_scores)[:top_n]
 
-        # Hybrid scoring
-        cand_idx = np.unique(np.concatenate([vec_idx, bm25_idx]))
-        v = np.array([vec_scores[list(vec_idx).index(idx)] if idx in vec_idx else 0.0 for idx in cand_idx])
-        b = np.array([bm25_scores[idx] if idx in bm25_idx else 0.0 for idx in cand_idx])
+        # Hybrid (FAISS only if no doc_ids restriction)
+        if not doc_ids:
+            D, I = self.faiss_indices[source_type].search(qv, top_n)
+            vec_idx, vec_scores = I[0], D[0]
+            valid = vec_idx < len(self.chunks[source_type])
+            vec_idx, vec_scores = vec_idx[valid], vec_scores[valid]
+            cand_idx = np.unique(np.concatenate([vec_idx, bm25_idx]))
+            v = np.array([vec_scores[list(vec_idx).index(idx)] if idx in vec_idx else 0.0 for idx in cand_idx])
+            b = np.array([bm25_scores[idx] if idx in bm25_idx else 0.0 for idx in cand_idx])
+        else:
+            cand_idx = bm25_idx
+            v = np.zeros(len(cand_idx))
+            b = bm25_scores[cand_idx]
+
         hybrid_scores = alpha * v + (1 - alpha) * b
         order = np.argsort(-hybrid_scores)[:min(k, len(cand_idx))]
 
         results = []
         for idx_pos in order:
             idx = int(cand_idx[idx_pos])
-            chunk = self.chunks[source_type][idx]
+            chunk = candidates[idx]
+            clean_text = self._filter_irrelevant_numbers(chunk.text)
+            if not clean_text:
+                continue
             results.append({
                 "chunk_id": chunk.chunk_id,
                 "doc_id": chunk.doc_id,
                 "title": chunk.title,
-                "text": chunk.text,
+                "text": clean_text,
                 "score_hybrid": float(hybrid_scores[idx_pos]),
                 "meta": chunk.meta,
             })
         return results
 
     # ---------------- Format for extractor ----------------
-    def format_for_extractor(self, query: str, source_type: str, run_id: str = None, k=5, alpha=0.5):
-        hits = self.retrieve(query, k=k, alpha=alpha, source_type=source_type)
+    def format_for_extractor(self, query: str, source_type: str, run_id: str = None, k=5, alpha=0.5, doc_ids: Optional[List[str]] = None):
+        hits = self.retrieve(query, k=k, alpha=alpha, source_type=source_type, doc_ids=doc_ids)
         if not hits:
             return None
 
-        evidence_chunks = [
-            Evidence(
-                chunk_id=h["chunk_id"],
-                doc_id=h["doc_id"],
-                text=h["text"],
-                title=h.get("title"),
-                meta=h.get("meta", {}),
+        evidence_chunks = []
+        for h in hits:
+            clean_text = self._filter_irrelevant_numbers(h["text"])
+            if not clean_text:
+                continue
+            evidence_chunks.append(
+                Evidence(
+                    chunk_id=h["chunk_id"],
+                    doc_id=h["doc_id"],
+                    text=clean_text,
+                    title=h.get("title"),
+                    meta=h.get("meta", {}),
+                )
             )
-            for h in hits
-        ]
+
+        # Guardrail: must have at least 3 chunks
+        if len(evidence_chunks) < 3:
+            return None
+
+        # Guardrail: if no numeric data, force descriptive
+        import re
+        numeric_tokens = re.findall(r"\d+(\.\d+)?", " ".join([c.text for c in evidence_chunks]))
+        provenance = {
+            "alpha": alpha,
+            "k": k,
+            "embedding_model": EMBED_MODEL,
+            "source_type": source_type,
+            "chunks_indexed": len(self.chunks[source_type]),
+            "chunks_used": len(evidence_chunks),
+        }
+        if len(set(numeric_tokens)) < 2:
+            provenance["force_test"] = "descriptive"
 
         return RetrievalOutput(
             run_id=run_id or str(uuid.uuid4()),
             query=query,
             evidence_chunks=evidence_chunks,
-            provenance={
-                "alpha": alpha,
-                "k": k,
-                "embedding_model": EMBED_MODEL,
-                "source_type": source_type,
-                "chunks_indexed": len(self.chunks[source_type]),
-            },
+            provenance=provenance,
         )
 
 # ---------------- Singleton ----------------

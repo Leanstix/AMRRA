@@ -34,6 +34,9 @@ class RetrieveRequest(BaseModel):
     alpha: float = 0.5
     section_filter: Union[str, List[str]] = "pdf"  # <-- accept str or list
     source_type: Optional[str] = None
+    # NEW: allow direct evidence injection
+    pdfs: Optional[List[Dict[str, str]]] = None   # [{"doc_id":.., "title":.., "content":..}]
+    urls: Optional[List[Dict[str, str]]] = None   # [{"doc_id":.., "title":.., "content":..}]
 
 
 class ChunkOut(BaseModel):
