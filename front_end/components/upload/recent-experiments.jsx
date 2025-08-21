@@ -77,7 +77,7 @@ export function RecentExperiments() {
                 <div className="flex items-start gap-2">
                   {getStatusIcon(experiment.status)}
                   <div className="flex-1 min-w-0">
-                    <h4 className="font-medium text-foreground academic-text text-sm leading-tight">
+                    <h4 className="font-medium text-foreground academic-text text-sm leading-tight break-words">
                       {experiment.title}
                     </h4>
                     <p className="text-xs text-muted-foreground control-text mt-1">{experiment.date}</p>
@@ -85,7 +85,7 @@ export function RecentExperiments() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="text-xs control-text">
                     {experiment.hypotheses} hypotheses
