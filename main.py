@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from Agents.routers.retriver_route import retriever_router
 from Agents.routers.extractor_route import extractor_router
-from Agents.Pipeline.pipeline import router as pipeline_router
+from Agents.routers.pipeline import router as pipeline_router
 
 
 app = FastAPI(title="Multi-Agent API")
