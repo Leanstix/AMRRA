@@ -27,7 +27,7 @@ def gpt5_explain_results(output: dict) -> str:
         return response.choices[0].message.content.strip()'''
         
         response = cohere_client.chat(
-            model="command-r-plus",  # Recommended Cohere chat model
+            model="command-r-plus", 
             message=f"""
             You are an expert statistics tutor.
             Here are the test results:
