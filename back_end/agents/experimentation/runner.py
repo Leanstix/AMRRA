@@ -15,7 +15,7 @@ except ImportError:
     def gpt5_explain_results(_):
         return "AI module not available (no API key)."
 
-def run_experiment(input_data: TwoSampleInput, with_ai: bool = False) -> ExperimentOutput:
+def run_experiment(input_data: TwoSampleInput, with_ai: bool = True) -> ExperimentOutput:
     """
     Main experiment dispatcher.
     Ensures ExperimentOutput format compliance.

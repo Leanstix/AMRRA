@@ -8,7 +8,7 @@ from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from .explain import gpt5_explain_results
 
 # ---------- ANOVA (raw only) ----------
-def anova_from_raw(groups: list[np.ndarray], alpha=0.05, with_ai=False):
+def anova_from_raw(groups: list[np.ndarray], alpha=0.05, with_ai=True):
     # Validate groups
     if len(groups) < 2:
         raise ValueError("At least two groups are required for ANOVA.")
@@ -77,7 +77,7 @@ def anova_from_raw(groups: list[np.ndarray], alpha=0.05, with_ai=False):
     return result
 
 # ---------- Regression (linear) ----------
-def linear_regression(y: np.ndarray, X: np.ndarray, alpha=0.05, with_ai=False):
+def linear_regression(y: np.ndarray, X: np.ndarray, alpha=0.05, with_ai=True):
     Xc = sm.add_constant(X)
     model = sm.OLS(y, Xc).fit()
     ci = model.conf_int(alpha=alpha).tolist()
@@ -98,7 +98,7 @@ def linear_regression(y: np.ndarray, X: np.ndarray, alpha=0.05, with_ai=False):
     return result
 
 # ---------- Regression (logistic) ----------
-def logistic_regression(y: np.ndarray, X: np.ndarray, alpha=0.05, with_ai=False):
+def logistic_regression(y: np.ndarray, X: np.ndarray, alpha=0.05, with_ai=True):
     Xc = sm.add_constant(X)
     model = sm.Logit(y, Xc).fit(disp=False)
     ci = model.conf_int(alpha=alpha).tolist()
@@ -119,7 +119,7 @@ def logistic_regression(y: np.ndarray, X: np.ndarray, alpha=0.05, with_ai=False)
     return result
 
 # ---------- Chi-square effect size ----------
-def cramers_v(table: list[list[int]], with_ai=False) -> float | dict:
+def cramers_v(table: list[list[int]], with_ai=True) -> float | dict:
     arr = np.array(table)
     chi2, _, _, _ = stats.chi2_contingency(arr)
     n = arr.sum()
@@ -139,7 +139,7 @@ def cramers_v(table: list[list[int]], with_ai=False) -> float | dict:
     return value
 
 # ---------- Confidence calibration ----------
-def calibrate_confidence(p_value=None, effect_size=None, n=None, quality_flags=None, with_ai=False):
+def calibrate_confidence(p_value=None, effect_size=None, n=None, quality_flags=None, with_ai=True):
     score = 0.5
     if p_value is not None:
         if p_value < 0.001: score += 0.3

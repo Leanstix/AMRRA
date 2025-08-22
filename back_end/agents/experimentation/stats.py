@@ -53,7 +53,7 @@ def ttest_from_raw(group1: np.ndarray, group2: np.ndarray, alpha=0.05, with_ai=F
     return result
 
 # ---------- Case B: Summary stats ----------
-def ttest_from_summary(mean1, sd1, n1, mean2, sd2, n2, alpha=0.05, with_ai=False):
+def ttest_from_summary(mean1, sd1, n1, mean2, sd2, n2, alpha=0.05, with_ai=True):
     # Welch’s t from summary stats
     se = math.sqrt(sd1**2/n1 + sd2**2/n2)
     if se == 0:
@@ -82,7 +82,7 @@ def ttest_from_summary(mean1, sd1, n1, mean2, sd2, n2, alpha=0.05, with_ai=False
     return result
 
 # ---------- Case C: Chi-square ----------
-def chi2_from_contingency(table, alpha=0.05, with_ai=False):
+def chi2_from_contingency(table, alpha=0.05, with_ai=True):
     chi2, p, dof, _ = stats.chi2_contingency(np.array(table))
     result = {
         "test_used": "Chi-square test of independence",
@@ -99,7 +99,7 @@ def chi2_from_contingency(table, alpha=0.05, with_ai=False):
         result["gpt5_explanation"] = gpt5_explain_results(result)
     return result
 
-def chi2_from_observed_expected(observed, expected, alpha=0.05, with_ai=False):
+def chi2_from_observed_expected(observed, expected, alpha=0.05, with_ai=True):
     chi2, p = stats.chisquare(f_obs=observed, f_exp=expected)
     df = len(observed) - 1
     result = {
@@ -118,7 +118,7 @@ def chi2_from_observed_expected(observed, expected, alpha=0.05, with_ai=False):
     return result
 
 # ---------- Simulation (when defensible) ----------
-def simulate_from_summary(mean, sd, n, seed=123, with_ai=False):
+def simulate_from_summary(mean, sd, n, seed=123, with_ai=True):
     rng = np.random.default_rng(seed)
     result = rng.normal(loc=mean, scale=sd, size=n)
 
@@ -126,7 +126,7 @@ def simulate_from_summary(mean, sd, n, seed=123, with_ai=False):
         result["gpt5_explanation"] = gpt5_explain_results(result)
     return result
 
-def ttest_via_simulation(g1, g2, alpha=0.05, with_ai=False):
+def ttest_via_simulation(g1, g2, alpha=0.05, with_ai=True):
     # bootstrap CI of mean diff for transparency
     rng = np.random.default_rng(7)
     t, p = stats.ttest_ind(g1, g2, equal_var=False)

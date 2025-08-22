@@ -73,3 +73,5 @@ class ExperimentOutput(BaseModel):
     conclusion: str
     quality_flags: List[str] = []
     plots: Optional[List[str]] = None
+    gpt5_explanation: Optional[str] = None
+    summary: Optional[str] = None
