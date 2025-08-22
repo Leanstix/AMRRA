@@ -1,10 +1,12 @@
 import re
+import uuid
 from typing import List, Dict, Any
-from PyPDF2 import PdfReader
 from collections import Counter
+from PyPDF2 import PdfReader
 from bs4 import BeautifulSoup
 import requests
-import uuid
+import numpy as np
+
 
 # ------------------- Text Cleaning -------------------
 def clean_text(text: str) -> str:
@@ -26,10 +28,6 @@ def extract_keywords(text: str, top_n=5) -> List[str]:
     return [w for w, _ in freq.most_common(top_n)]
 
 
-# ------------------- Text Chunking -------------------
-
-
-
 # ------------------- PDF Extraction -------------------
 def extract_pdf_text(file_path: str) -> List[Dict[str, Any]]:
     """Extract clean text from each page of a PDF."""
@@ -49,10 +47,7 @@ def extract_pdf_text(file_path: str) -> List[Dict[str, Any]]:
 
 # ------------------- URL Fetching -------------------
 def fetch_and_clean_url(url: str) -> str:
-    """
-    Download a webpage and return cleaned text.
-    Removes scripts, styles, and common non-content elements.
-    """
+    """Download a webpage and return cleaned text."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -77,20 +72,25 @@ def fetch_and_clean_url(url: str) -> str:
 
     text = soup.get_text(separator=" ")
     return clean_text(text)
+
+
+# ------------------- Numbers Extraction -------------------
 def extract_numbers(text: str) -> List[float]:
-    """
-    Extract numeric values from a chunk of text. Returns list of floats.
-    Handles integers, decimals, negative numbers.
-    """
+    """Extract numeric values from text."""
     matches = re.findall(r'-?\d+(?:\.\d+)?', text)
     return [float(m) for m in matches]
 
-def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100,
-               doc_id: str = None, title: str = None, meta: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-    """
-    Splits text into overlapping chunks with metadata.
-    Returns list of dicts: chunk_id, doc_id, text, meta
-    """
+
+# ------------------- Text Chunking -------------------
+def chunk_text(
+    text: str,
+    chunk_size: int = 500,
+    chunk_overlap: int = 100,
+    doc_id: str = None,
+    title: str = None,
+    meta: Dict[str, Any] = None
+) -> List[Dict[str, Any]]:
+    """Split text into overlapping chunks with metadata."""
     meta = meta or {}
     tokens = text.split()
     chunks = []
@@ -111,3 +111,30 @@ def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100,
         chunks.append(chunk)
         start += chunk_size - chunk_overlap
     return chunks
+
+
+# ------------------- Retriever Utils -------------------
+class RetrieverUtils:
+    EPS = 1e-10
+
+    @staticmethod
+    def tokenize(text: str) -> List[str]:
+        return text.lower().split()
+
+    @staticmethod
+    def normalize_vector(v: np.ndarray) -> np.ndarray:
+        norm = np.linalg.norm(v)
+        return v / (norm + RetrieverUtils.EPS)
+
+    @staticmethod
+    def filter_irrelevant_numbers(text: str) -> str:
+        """Drop noisy number-like patterns (ISBNs, SKUs, dimensions, etc.)."""
+        # Drop ISBNs
+        text = re.sub(r"\b97[89][0-9]{10}\b", "", text)
+        # Drop product dimensions
+        text = re.sub(r"\b\d+(\.\d+)?\s?(cm|mm|inch|inches|kg|lbs)\b", "", text, flags=re.I)
+        # Drop ASINs / SKU-like codes
+        text = re.sub(r"\b[A-Z0-9]{8,}\b", "", text)
+        # Drop page numbers
+        text = re.sub(r"\bPage\s?\d+\b", "", text, flags=re.I)
+        return text.strip()
