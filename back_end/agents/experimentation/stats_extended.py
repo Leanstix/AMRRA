@@ -6,7 +6,6 @@ import statsmodels.formula.api as smf
 import pandas as pd
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from .explain import gpt5_explain_results
-
 # ---------- ANOVA (raw only) ----------
 def anova_from_raw(groups: list[np.ndarray], alpha=0.05, with_ai=True):
     # Validate groups
@@ -75,6 +74,7 @@ def anova_from_raw(groups: list[np.ndarray], alpha=0.05, with_ai=True):
         result["gpt5_explanation"] = gpt5_explain_results(result)
     
     return result
+
 
 # ---------- Regression (linear) ----------
 def linear_regression(y: np.ndarray, X: np.ndarray, alpha=0.05, with_ai=True):

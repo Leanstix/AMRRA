@@ -8,12 +8,7 @@ from .stats_extended import (
     anova_from_raw, linear_regression, logistic_regression,
     cramers_v, calibrate_confidence
 )
-
-try:
-    from .explain import gpt5_explain_results
-except ImportError:
-    def gpt5_explain_results(_):
-        return "AI module not available (no API key)."
+from .explain import gpt5_explain_results, explain_descriptive_tests
 
 def run_experiment(input_data: TwoSampleInput, with_ai: bool = True) -> ExperimentOutput:
     """
@@ -81,14 +76,8 @@ def run_experiment(input_data: TwoSampleInput, with_ai: bool = True) -> Experime
 
     # ---------- Fallback ----------
     else:
-        return ExperimentOutput(
-            hypothesis=data.hypothesis,
-            variables=data.variables,
-            evidence=data.evidence,
-            test_used="none",
-            conclusion="Insufficient data to run a sound statistical test.",
-            quality_flags=["insufficient_data"]
-        )
+        res = explain_descriptive_tests(data)
+        res["test_used"] = res.get("test_used", data.test)
 
     # ---------- Confidence calibration ----------
     conf_data = calibrate_confidence(

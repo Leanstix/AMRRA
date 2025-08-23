@@ -19,13 +19,12 @@ import time
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 def map_extraction_to_experiment_input(hypothesis_obj):
+    valid_groups = [g for g in hypothesis_obj.get("groups_raw", []) if g["data"]]
     return {
         "hypothesis": hypothesis_obj["hypothesis"],
         "test": hypothesis_obj.get("test", "ttest"),
         "alpha": 0.05,
-        "groups_raw": [
-            {"name": g["name"], "values": g["data"]} for g in hypothesis_obj.get("groups_raw", [])
-        ]
+        "groups_raw": [{"name": g["name"], "values": g["data"]} for g in valid_groups]
     }
 
 @router.post("/final", response_model=dict)
@@ -145,7 +144,7 @@ async def pipeline_run(req: RetrieveRequest):
             experiment_input = map_extraction_to_experiment_input(hypothesis)
 
             task = run_experiment_task.apply_async(args=[experiment_input])
-            timeout = 60  # seconds
+            timeout = 1000
             start = time.time()
 
             while not task.ready():
