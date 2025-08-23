@@ -1,4 +1,16 @@
 .env
+front_end/node_modules/
+front_end/dist/
+front_end/.next/
+front_end/out/
+front_end/build/
 
-node_modules
+front_end/npm-debug.log*
+front_end/yarn-debug.log*
+front_end/yarn-error.log*
+front_end/.pnpm-debug.log*
 
+front_end/.vercel
+
+front_end/*.tsbuildinfo
+front_end/next-env.d.ts
