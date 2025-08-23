@@ -1,5 +1,5 @@
 #from openai import OpenAI
-from back_end.settings import settings
+from settings import settings
 import cohere
 
 #client = OpenAI(api_key=settings.OPENAI_API_KEY)

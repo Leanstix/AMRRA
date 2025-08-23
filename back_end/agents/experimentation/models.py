@@ -67,6 +67,7 @@ class ExperimentOutput(BaseModel):
     estimate: Optional[Union[List[float], float]] = None
     df: Optional[Union[float, List[int]]] = None
     confidence_score: float = 0.0
+    confidence_explanation: Optional[str] = None
 
     # Metadata
     method_notes: Optional[str] = None

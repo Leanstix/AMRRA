@@ -3,9 +3,9 @@ import os
 import uuid
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from model.retriever_model import IngestRequest
-from Agents.Retriever.utils import extract_pdf_text, fetch_and_clean_url
+from agents.Retriever.utils import extract_pdf_text, fetch_and_clean_url
 from redis_client import get_cached_chunk, set_cached_chunk
-from Agents.Retriever.retriever import engine  # your ingestion engine
+from agents.Retriever.retriever import engine  # your ingestion engine
 
 retriever_router = APIRouter(prefix="/retriever", tags=["retriever"])
 

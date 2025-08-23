@@ -43,7 +43,7 @@ async def generate_report_json(data: dict) -> dict:
 '''
 
 import cohere
-from back_end.settings import settings
+from settings import settings
 import json
 
 cohere_client = cohere.Client(settings.COHERE_API_KEY)

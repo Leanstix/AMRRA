@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from typing import Union
 
 from model.extractor_model import RetrievalOutput, ExtractionOutput, ExtractionError
-from Agents.Extractor.run_extraction import run_extraction
+from agents.Extractor.run_extraction import run_extraction
 
 extractor_router = APIRouter(prefix="/extractor", tags=["extractor"])
 

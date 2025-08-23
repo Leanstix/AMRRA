@@ -1,4 +1,4 @@
-from back_end.celery_app import celery_app
+from celery_app import celery_app
 from .runner import run_experiment
 from .models import TwoSampleInput
 

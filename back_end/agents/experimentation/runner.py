@@ -91,14 +91,17 @@ def run_experiment(input_data: TwoSampleInput, with_ai: bool = True) -> Experime
         )
 
     # ---------- Confidence calibration ----------
-    res["confidence_interval"] = res.get("confidence_interval") or None
-    res["conclusion"] = res.get("conclusion") or "No conclusion drawn."
-    res["confidence_score"] = calibrate_confidence(
+    conf_data = calibrate_confidence(
         p_value=res.get("p_value"),
         effect_size=res.get("effect_size"),
         n=sum(len(g.values) for g in data.groups_raw) if data.groups_raw else None,
-        quality_flags=quality_flags
+        quality_flags=quality_flags,
+        with_ai=True
     )
+    res["confidence_interval"] = res.get("confidence_interval") or None
+    res["conclusion"] = res.get("conclusion") or "No conclusion drawn."
+    res["confidence_score"] = conf_data["confidence_score"]
+    res["confidence_explanation"] = conf_data.get("gpt5_explanation")
 
     # ---------- Optional GPT-5 Explanation ----------
     if with_ai:
