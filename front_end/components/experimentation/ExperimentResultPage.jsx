@@ -1,10 +1,10 @@
 import React from "react";
-import TTestResult from "./tests/TTestResult";
-import ChiSquareResult from "./tests/ChiSquareResult";
-import AnovaResult from "./tests/AnovaResult";
-import LinearRegressionResult from "./tests/LinearRegressionResult";
-import LogisticRegressionResult from "./tests/LogisticRegressionResult";
-import LogicalTestResult from "./tests/LogicalTestResult";
+import TTestResult from "./components/TTestResult";
+//import ChiSquareResult from "./components/ChiSquareResult";
+import AnovaResult from "./components/AnovaResult";
+import LinearRegressionResult from "./components/LinearRegressionResult";
+import LogisticRegressionResult from "./components/LogisticRegressionResult";
+import LogicalTestResult from "./components/LogicalTestResult";
 
 const ExperimentResultPage = ({ data }) => {
   if (!data) return <p>No data available</p>;
@@ -13,8 +13,8 @@ const ExperimentResultPage = ({ data }) => {
     switch (data.test) {
       case "ttest":
         return <TTestResult result={data} />;
-      case "chi2":
-        return <ChiSquareResult result={data} />;
+    //   case "chi2":
+    //     return <ChiSquareResult result={data} />;
       case "anova":
         return <AnovaResult result={data} />;
       case "linear_regression":
