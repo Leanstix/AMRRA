@@ -156,13 +156,5 @@ def calibrate_confidence(p_value=None, effect_size=None, n=None, quality_flags=N
         if any("simulated" in f.lower() for f in quality_flags): score -= 0.1
 
     score = max(0.0, min(1.0, score))
-    if with_ai:
-        return {
-            "confidence_score": score,
-            "gpt5_explanation": gpt5_explain_results({
-                "test_used": "Confidence calibration",
-                "estimate": score,
-                "method_notes": "Heuristic scoring combining p-value, effect size, sample size, and quality flags."
-            })
-        }
-    return score
+    
+    return float(score)

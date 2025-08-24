@@ -80,17 +80,28 @@ def run_experiment(input_data: TwoSampleInput, with_ai: bool = True) -> Experime
         res["test_used"] = res.get("test_used", data.test)
 
     # ---------- Confidence calibration ----------
-    conf_data = calibrate_confidence(
+    confidence_score = calibrate_confidence(
         p_value=res.get("p_value"),
         effect_size=res.get("effect_size"),
         n=sum(len(g.values) for g in data.groups_raw) if data.groups_raw else None,
         quality_flags=quality_flags,
-        with_ai=True
+        with_ai=True 
     )
+
+    # Get AI explanation separately if needed
+    if with_ai:
+        explanation = gpt5_explain_results({
+            "test_used": "Confidence calibration",
+            "estimate": confidence_score,
+            "method_notes": "Heuristic scoring combining p-value, effect size, sample size, and quality flags."
+        })
+        res["confidence_explanation"] = explanation
+    else:
+        res["confidence_explanation"] = None
+
+    res["confidence_score"] = confidence_score
     res["confidence_interval"] = res.get("confidence_interval") or None
     res["conclusion"] = res.get("conclusion") or "No conclusion drawn."
-    res["confidence_score"] = conf_data["confidence_score"]
-    res["confidence_explanation"] = conf_data.get("gpt5_explanation")
 
     # ---------- Optional GPT-5 Explanation ----------
     if with_ai:

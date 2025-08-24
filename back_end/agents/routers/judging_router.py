@@ -4,6 +4,7 @@ from agents.judging.pdf_generator import generate_pdf_report
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 import os
+import uuid
 
 judging_router = APIRouter()
 
@@ -20,10 +21,16 @@ async def generate_stat_report(input_data: ExperimentData):
 async def judge_experiment(input_data: ExperimentResultForJudging):
     """
     Accepts the result of an experiment, generates a report, and returns it as a PDF.
+    Each file gets a unique name and stays on the server.
     """
     report_json = await generate_report_json(input_data.result.model_dump())
-    
-    pdf_path = "report.pdf"
+
+    unique_filename = f"report_{uuid.uuid4().hex}.pdf"
+    pdf_dir = "generated_reports" 
+    os.makedirs(pdf_dir, exist_ok=True)
+
+    pdf_path = os.path.join(pdf_dir, unique_filename)
+
     generate_pdf_report(report_json, pdf_path)
-    
-    return FileResponse(pdf_path, media_type='application/pdf', filename='report.pdf')
+
+    return FileResponse(pdf_path, media_type='application/pdf', filename=unique_filename)
