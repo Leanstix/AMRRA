@@ -1,29 +1,21 @@
-<<<<<<< HEAD
 .env
+
+# Frontend build and dependency directories
 front_end/node_modules/
-front_end/dist/
 front_end/.next/
 front_end/out/
 front_end/build/
+front_end/dist/
 
+# Frontend logs
 front_end/npm-debug.log*
 front_end/yarn-debug.log*
 front_end/yarn-error.log*
 front_end/.pnpm-debug.log*
 
-front_end/.vercel
+# Frontend Vercel deployment files
+front_end/.vercel/
 
+# Frontend TypeScript build artifacts
 front_end/*.tsbuildinfo
 front_end/next-env.d.ts
-=======
-venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pyw
-*.pyz
-*.pywz
-*.pyzw
-*.pyzwz
->>>>>>> 90d371d (added Necessary ignores in .gitignore file.)
