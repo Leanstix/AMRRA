@@ -7,6 +7,7 @@ import { Upload, FileText, X } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/use-toast"
 import { Separator } from "@/components/ui/separator"
+import { injestDocuments } from "@/lib/api"
 
 export function UploadArea() {
   const [isDragOver, setIsDragOver] = useState(false)
@@ -51,22 +52,39 @@ export function UploadArea() {
     setUploadedFile(null)
   }, [])
 
-  const simulateProcessing = useCallback(() => {
-    setIsProcessing(true)
-    toast({ title: "Processing", description: "Simulating paper extraction..." })
-
-    setTimeout(() => {
-      setIsProcessing(false)
-      window.location.href = "/hypotheses"
-    }, 5000)
-  }, [toast])
-
-  const handleProcessPaper = useCallback(() => {
+  const handleProcessPaper = useCallback(async () => {
     if (!uploadedFile) return
-    simulateProcessing()
-  }, [uploadedFile, simulateProcessing])
+    setIsProcessing(true)
 
-  const handleFetchPaper = useCallback(() => {
+    try {
+      const formData = new FormData()
+      formData.append("files", uploadedFile)
+      formData.append(
+        "request",
+        JSON.stringify({
+          items: [{ doc_id: uploadedFile.name, title: uploadedFile.name }]
+        })
+      )
+
+      await injestDocuments(formData, true) 
+
+      toast({ title: "Success", description: "Paper processed successfully!" })
+      setTimeout(() => {
+        setIsProcessing(false)
+        window.location.href = "/hypotheses"
+      }, 800)
+    } catch (error) {
+      setIsProcessing(false)
+      const detail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.message ||
+        "Could not process the uploaded file"
+      toast({ title: "Error", description: detail, variant: "destructive" })
+    }
+  }, [uploadedFile, toast])
+
+  const handleFetchPaper = useCallback(async () => {
     const raw = paperUrl.trim()
     if (!raw) {
       toast({
@@ -77,14 +95,37 @@ export function UploadArea() {
       return
     }
 
-    setIsFetching(true)
-    toast({ title: "Fetching", description: "Simulating paper fetch..." })
+    const normalizedUrl = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
 
-    setTimeout(() => {
+    setIsFetching(true)
+    try {
+      await injestDocuments({
+        items: [
+          {
+            doc_id: "url_" + Date.now(),
+            title: "Fetched Paper",
+            url: normalizedUrl
+          }
+        ]
+      })
+
+      toast({ title: "Success", description: "Paper fetched successfully!" })
       setIsFetching(false)
-      simulateProcessing()
-    }, 2000)
-  }, [paperUrl, toast, simulateProcessing])
+      setIsProcessing(true)
+      setTimeout(() => {
+        setIsProcessing(false)
+        window.location.href = "/hypotheses"
+      }, 800)
+    } catch (error) {
+      setIsFetching(false)
+      const detail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.message ||
+        "Could not fetch this paper"
+      toast({ title: "Error", description: detail, variant: "destructive" })
+    }
+  }, [paperUrl, toast])
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return "0 Bytes"
