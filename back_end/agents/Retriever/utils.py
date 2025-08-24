@@ -59,7 +59,7 @@ def fetch_and_clean_url(url: str) -> str:
     }
 
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=1000)
         resp.raise_for_status()
     except Exception as e:
         raise RuntimeError(f"Failed to fetch URL {url}: {e}")

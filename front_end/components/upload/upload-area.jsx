@@ -3,10 +3,11 @@
 import { useState, useCallback } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Upload, FileText, X, Link } from "lucide-react"
+import { Upload, FileText, X } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/use-toast"
 import { Separator } from "@/components/ui/separator"
+import { injestDocuments } from "@/lib/api"
 
 export function UploadArea() {
   const [isDragOver, setIsDragOver] = useState(false)
@@ -34,11 +35,7 @@ export function UploadArea() {
     if (files.length > 0) {
       const file = files[0]
       if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
-        setUploadedFile({
-          name: file.name,
-          size: file.size,
-          type: file.type,
-        })
+        setUploadedFile(file)
       }
     }
   }, [])
@@ -47,11 +44,7 @@ export function UploadArea() {
     const files = e.target.files
     if (files && files.length > 0) {
       const file = files[0]
-      setUploadedFile({
-        name: file.name,
-        size: file.size,
-        type: file.type,
-      })
+      setUploadedFile(file)
     }
   }, [])
 
@@ -59,57 +52,78 @@ export function UploadArea() {
     setUploadedFile(null)
   }, [])
 
-  const handleProcessPaper = useCallback(() => {
+  const handleProcessPaper = useCallback(async () => {
+    if (!uploadedFile) return
     setIsProcessing(true)
-    // Simulate processing
-    setTimeout(() => {
-      setIsProcessing(false)
-      window.location.href = "/hypotheses"
-    }, 2000)
-  }, [])
-  
-  const handleFetchPaper = useCallback(async () => {
-    if (!paperUrl.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a valid paper URL",
-        variant: "destructive",
-      })
-      return
-    }
-    
-    setIsFetching(true)
+
     try {
-      const response = await fetch('/api/fetchPaper', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: paperUrl }),
-      })
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch paper')
-      }
-      
-      const data = await response.json()
-      
-      // Process the paper data the same way as file upload
-      setIsFetching(false)
-      setIsProcessing(true)
-      
-      // Simulate processing
+      const formData = new FormData()
+      formData.append("files", uploadedFile)
+      formData.append(
+        "request",
+        JSON.stringify({
+          items: [{ doc_id: uploadedFile.name, title: uploadedFile.name }]
+        })
+      )
+
+      await injestDocuments(formData, true) 
+
+      toast({ title: "Success", description: "Paper processed successfully!" })
       setTimeout(() => {
         setIsProcessing(false)
         window.location.href = "/hypotheses"
-      }, 2000)
+      }, 800)
     } catch (error) {
-      setIsFetching(false)
+      setIsProcessing(false)
+      const detail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.message ||
+        "Could not process the uploaded file"
+      toast({ title: "Error", description: detail, variant: "destructive" })
+    }
+  }, [uploadedFile, toast])
+
+  const handleFetchPaper = useCallback(async () => {
+    const raw = paperUrl.trim()
+    if (!raw) {
       toast({
         title: "Error",
-        description: "Could not fetch this paper",
-        variant: "destructive",
+        description: "Please enter a valid paper URL",
+        variant: "destructive"
       })
+      return
+    }
+
+    const normalizedUrl = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+
+    setIsFetching(true)
+    try {
+      await injestDocuments({
+        items: [
+          {
+            doc_id: "url_" + Date.now(),
+            title: "Fetched Paper",
+            url: normalizedUrl
+          }
+        ]
+      })
+
+      toast({ title: "Success", description: "Paper fetched successfully!" })
+      setIsFetching(false)
+      setIsProcessing(true)
+      setTimeout(() => {
+        setIsProcessing(false)
+        window.location.href = "/hypotheses"
+      }, 800)
+    } catch (error) {
+      setIsFetching(false)
+      const detail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.message ||
+        "Could not fetch this paper"
+      toast({ title: "Error", description: detail, variant: "destructive" })
     }
   }, [paperUrl, toast])
 
@@ -148,14 +162,14 @@ export function UploadArea() {
               </Button>
               <p className="text-sm text-muted-foreground control-text mt-2">Supports PDF files up to 10MB</p>
             </div>
-            
+
             <div className="text-center">
               <div className="flex items-center gap-2 my-4">
                 <Separator className="flex-1" />
                 <span className="text-sm text-muted-foreground">OR</span>
                 <Separator className="flex-1" />
               </div>
-              
+
               <div className="flex flex-col sm:flex-row gap-2">
                 <div className="flex-1">
                   <Input
@@ -167,8 +181,8 @@ export function UploadArea() {
                     disabled={isFetching}
                   />
                 </div>
-                <Button 
-                  onClick={handleFetchPaper} 
+                <Button
+                  onClick={handleFetchPaper}
                   disabled={isFetching || isProcessing}
                   className="control-text"
                 >
