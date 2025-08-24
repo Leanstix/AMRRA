@@ -22,3 +22,8 @@ class ExperimentData(BaseModel):
     status: str
     result: ResultData
     explanation: Optional[str] = Field(default=None, description="High-level explanation of the experiment outcome")
+
+class ExperimentResultForJudging(BaseModel):
+    status: str
+    result: ResultData
+    explanation: Optional[str] = Field(default=None, description="High-level explanation of the experiment outcome")
