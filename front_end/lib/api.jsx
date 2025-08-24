@@ -14,3 +14,13 @@ export const injestDocuments = async (data, isFile = false) => {
     throw err
   }
 }
+
+export const experimentResults = async (task_id) => {
+  const url = `${BASE_URL}/experiment/result/${task_id}`
+  try {
+    const resp = await axios.post(url)
+    return resp.data
+  } catch (err) {
+    throw err
+  }
+}
