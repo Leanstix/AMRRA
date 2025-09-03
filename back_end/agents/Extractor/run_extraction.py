@@ -1,5 +1,6 @@
 from model.extractor_model import ExtractionOutput, ExtractionError, RetrievalOutput
 from .extractor import OptimizedExtractionChainFull
+import uuid
 
 def run_extraction(input_data: RetrievalOutput) -> ExtractionOutput | ExtractionError:
     result = OptimizedExtractionChainFull().run(input_data)
@@ -21,7 +22,7 @@ def run_extraction(input_data: RetrievalOutput) -> ExtractionOutput | Extraction
         })
 
     return ExtractionOutput(
-        run_id=input_data.run_id,
+        run_id=str(uuid.uuid4()),
         hypotheses=hypotheses,
         notes="",
         provenance={"chunks_used": len(input_data.evidence_chunks)}

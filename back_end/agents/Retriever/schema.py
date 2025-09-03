@@ -2,13 +2,12 @@ import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 
-EPS = 1e-12
-
 
 @dataclass
 class Chunk:
     chunk_id: str
     doc_id: str
+    source_type: str   # e.g., "pdf" or "url"
     title: str
     text: str
     meta: Dict[str, Any]
@@ -19,5 +18,5 @@ class Chunk:
     score_hybrid: float = 0.0
 
 
-# External models (already in model/extractor_model)
+# ✅ Import extractor-compatible dataclasses
 from model.extractor_model import Evidence, RetrievalOutput

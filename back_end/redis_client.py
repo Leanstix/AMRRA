@@ -1,39 +1,45 @@
-# redis_doc_cache.py
-import asyncio
+import os
 import json
-import hashlib
-from redis.asyncio import Redis
-from concurrent.futures import ThreadPoolExecutor
+import redis.asyncio as redis
+import logging
 
-redis = Redis(host="localhost", port=6379, db=0, decode_responses=True)
-executor = ThreadPoolExecutor()
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-def _hash_key(doc_id: str, chunk_text: str) -> str:
-    """Generate a Redis-safe key for a chunk under a doc_id."""
-    text_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
-    return f"{doc_id}:{text_hash}"
+CHUNK_PREFIX = "chunk:"       # stores individual chunks
+DOC_PREFIX = "doc_chunks:"    # stores list of chunk_ids per doc
 
-async def set_cached_chunk(key: str, value: str, expire: int = 86400):
-    await redis.set(key, value, ex=expire)
 
-async def get_cached_chunk(key: str):
-    return await redis.get(key)
+async def cache_chunk(chunk: dict, expire_seconds: int = 24*3600):
+    """
+    Store a chunk in Redis and register its ID under the doc.
+    chunk must contain: chunk_id, doc_id, text, title, meta
+    """
+    chunk_id = chunk["chunk_id"]
+    doc_id = chunk["doc_id"]
 
-async def _embed_text(text: str, embed_fn):
-    """Run embedding in executor if embed_fn is sync."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(executor, lambda: embed_fn([text])[0])
+    try:
+        # Store the chunk
+        await redis_client.set(f"{CHUNK_PREFIX}{chunk_id}", json.dumps(chunk), ex=expire_seconds)
+        # Register chunk ID under the document
+        await redis_client.rpush(f"{DOC_PREFIX}{doc_id}", chunk_id)
+        logging.info(f"[REDIS] Cached chunk {chunk_id} for doc {doc_id}")
+    except Exception as e:
+        logging.error(f"[REDIS] Failed to cache chunk {chunk_id}: {e}")
 
-async def batch_embed_chunks(doc_id: str, chunks: list, embed_fn, expire: int = 86400):
-    """Embed chunks (PDF, URL, text) and cache them in Redis under the same doc_id."""
-    
-    async def process_chunk(chunk_text: str):
-        key = _hash_key(doc_id, chunk_text)
-        cached = await get_cached_chunk(key)
-        if cached:
-            return json.loads(cached)
-        vec = await _embed_text(chunk_text, embed_fn)
-        await set_cached_chunk(key, json.dumps(vec), expire=expire)
-        return vec
 
-    return await asyncio.gather(*(process_chunk(c) for c in chunks))
+async def get_cached_chunks(doc_ids: list) -> list:
+    """
+    Fetch all cached chunks for a list of doc_ids.
+    """
+    chunks = []
+    for doc_id in doc_ids:
+        try:
+            chunk_ids = await redis_client.lrange(f"{DOC_PREFIX}{doc_id}", 0, -1)
+            for chunk_id in chunk_ids:
+                raw = await redis_client.get(f"{CHUNK_PREFIX}{chunk_id}")
+                if raw:
+                    chunks.append(json.loads(raw))
+        except Exception as e:
+            logging.error(f"[REDIS] Failed to fetch chunks for doc {doc_id}: {e}")
+    return chunks

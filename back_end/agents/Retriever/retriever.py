@@ -1,166 +1,195 @@
-import uuid
-import numpy as np
-import faiss
-from rank_bm25 import BM25Okapi
+import logging
+from typing import List, Dict, Union, Optional
+from dotenv import load_dotenv
 
-from langchain.embeddings import OpenAIEmbeddings
-from langchain_community.embeddings import CohereEmbeddings
+from langchain_groq import ChatGroq
+from langchain.prompts import PromptTemplate
+from langchain.agents import initialize_agent, Tool
+from langchain.schema import Document
 
-from model.extractor_model import Evidence, RetrievalOutput
-from .schema import Chunk
-from .utils import RetrieverUtils,chunk_text
-from .store import RetrieverPersistence
-from .config import OPENAI_API_KEY, COHERE_API_KEY, EMBED_MODEL
+from model.extractor_model import RetrievalOutput, Evidence
+from .retriever_engine import RetrieverEngine
+from agents.shared.doc_store import doc_store  # ✅ use shared doc_store
 
-class RetrieverEngine:
-    SOURCES = ("pdf", "url")
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-    def __init__(self):
-        if OPENAI_API_KEY:
-            self._embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-        elif COHERE_API_KEY:
-            self._embeddings = CohereEmbeddings(model=EMBED_MODEL, cohere_api_key=COHERE_API_KEY)
-        else:
-            raise RuntimeError("No API key found for embeddings.")
 
-        self.dim = len(self._embeddings.embed_query("dimension-check-phrase"))
-        self.faiss_indices = {src: faiss.IndexFlatIP(self.dim) for src in self.SOURCES}
-        self.chunks = {src: [] for src in self.SOURCES}
-        self._bm25 = {src: None for src in self.SOURCES}
-        self._texts_for_bm25 = {src: [] for src in self.SOURCES}
+class RetrieverAgent:
+    def __init__(self, llm=None):
+        self.engine = RetrieverEngine()
+        self.llm = llm or ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 
-        RetrieverPersistence.load(self.chunks, self.faiss_indices, self._bm25, self._texts_for_bm25, self.SOURCES)
+        self.refine_prompt = PromptTemplate(
+            input_variables=["query"],
+            template=(
+                "You are an expert retrieval assistant. "
+                "Refine this query into a sharper, more specific version:\n\n"
+                "Original: {query}\n\nRefined:"
+            ),
+        )
 
-    # -------- Persistence --------
-    def save(self):
-        RetrieverPersistence.save(self.chunks, self.SOURCES)
+    # -------------------- Ingest --------------------
+    def ingest(self, sources: List[Dict[str, Union[str, bytes]]], force: bool = False) -> List[str]:
+        ingested_docs = []
+        for src in sources:
+            doc_id = src.get("doc_id")
+            logging.debug(f"[INGEST] Processing source: {src}")
+            if not doc_id:
+                logging.warning("[INGEST] Skipping source with no doc_id")
+                continue
+            if doc_id in doc_store and not force:
+                logging.info(f"[INGEST] Skipping already ingested doc {doc_id}")
+                continue
 
-    # -------- Ingest --------
-    def ingest_batch(self, items, source_type: str, chunk_size=500, chunk_overlap=100):
-        if source_type not in self.SOURCES:
-            raise ValueError(f"Invalid source_type: {source_type}")
+            success = False
+            try:
+                if "file_bytes" in src or "file_path" in src:
+                    logging.info(f"[INGEST] Ingesting PDF for doc_id={doc_id}")
+                    success = self.engine.ingest_pdfs(
+                        file_bytes=src.get("file_bytes"),
+                        file_path=src.get("file_path"),
+                        doc_id=doc_id
+                    )
+                elif "url" in src:
+                    logging.info(f"[INGEST] Ingesting URL {src['url']} for doc_id={doc_id}")
+                    success = self.engine.ingest_urls(
+                        src["url"], doc_id, chunk_size=1000, chunk_overlap=100
+                    )
 
-        existing_ids = {c.doc_id for c in self.chunks[source_type]}
-        items = [it for it in items if it["doc_id"] not in existing_ids]
-        if not items:
-            return {"added_docs": 0, "added_chunks": 0, "chunks_total": len(self.chunks[source_type])}
+                if success:
+                    # ✅ register in shared doc_store
+                    doc_store[doc_id] = {
+                        "type": "pdf" if "file_bytes" in src or "file_path" in src else "url",
+                        "path": src.get("file_path") or src.get("url", "upload"),
+                        "title": src.get("title")
+                    }
+                    ingested_docs.append(doc_id)
+                    logging.info(f"[INGEST] Added {doc_id} ({doc_store[doc_id]['type']})")
+                else:
+                    logging.error(f"[INGEST] FAILED to ingest {doc_id}")
+            except Exception as e:
+                logging.exception(f"[INGEST] Exception while ingesting {doc_id}: {e}")
 
-        new_chunks, texts = [], []
+        return ingested_docs
 
-        for it in items:
-            chunk_data = chunk_text(it["text"], chunk_size, chunk_overlap, it["doc_id"], it.get("title"), it.get("meta", {}))
-            for c in chunk_data:
-                c["text"] = RetrieverUtils.filter_irrelevant_numbers(c["text"])
-                if not c["text"]:
-                    continue
-                chunk = Chunk(**c)
-                chunk.tokens = RetrieverUtils.tokenize(chunk.text)
-                texts.append(chunk.text)
-                new_chunks.append(chunk)
+    # -------------------- Build Tools --------------------
+    def build_tools(self, allowed_doc_ids: List[str], top_k: int = 5) -> List[Tool]:
+        tools = []
+        logging.debug(f"[TOOLS] Building tools for doc_ids={allowed_doc_ids}")
 
-        embeddings = self._embeddings.embed_documents(texts)
-        for i, vec in enumerate(embeddings):
-            new_chunks[i].vector = RetrieverUtils.normalize_vector(np.array(vec, dtype=np.float32))
-            self.faiss_indices[source_type].add(new_chunks[i].vector.reshape(1, -1))
+        for doc_id in allowed_doc_ids:
+            if doc_id not in doc_store:
+                logging.warning(f"[TOOLS] Skipping {doc_id}, not in doc_store")
+                continue
+            doc_type = doc_store[doc_id]["type"]
 
-        self.chunks[source_type].extend(new_chunks)
-        self._texts_for_bm25[source_type] = [c.tokens for c in self.chunks[source_type]]
-        self._bm25[source_type] = BM25Okapi(self._texts_for_bm25[source_type])
+            def make_retriever_fn(doc_id=doc_id, doc_type=doc_type):
+                def retriever_fn(query: str) -> str:
+                    logging.debug(f"[TOOLS] Running retriever_fn for doc_id={doc_id}, query='{query}'")
+                    try:
+                        docs: List[Document] = self.engine.retrieve(
+                            query, doc_ids=[doc_id], source_type=doc_type, top_k=top_k
+                        )
+                        if not docs:
+                            logging.warning(f"[NO RESULTS] For query='{query}' in doc_id={doc_id}")
+                            return f"[NO RESULTS] No evidence found in {doc_id}"
+                        return "\n\n".join(d.page_content for d in docs)
+                    except Exception as e:
+                        logging.exception(f"[TOOLS] Error in retriever_fn for {doc_id}: {e}")
+                        return f"[ERROR] Retrieval failed for {doc_id}: {e}"
+                return retriever_fn
 
-        return {
-            "added_docs": len(items),
-            "added_chunks": len(new_chunks),
-            "chunks_total": len(self.chunks[source_type]),
-        }
+            tools.append(
+                Tool(
+                    name=f"search_{doc_type}_{doc_id}",
+                    func=make_retriever_fn(),
+                    description=f"Search only inside {doc_type} document {doc_id}"
+                )
+            )
+            logging.debug(f"[TOOLS] Added tool for {doc_id}")
 
-    # -------- Retrieval --------
-    def retrieve(self, query: str, k=5, alpha=0.5, source_type="pdf", doc_ids=None):
-        if source_type not in self.SOURCES or not self.chunks[source_type]:
-            return []
+        return tools
 
-        candidates = [c for c in self.chunks[source_type] if not doc_ids or c.doc_id in doc_ids]
-        if not candidates:
-            return []
-
-        n_docs = len(candidates)
-        qv = RetrieverUtils.normalize_vector(np.array(self._embeddings.embed_query(query), dtype=np.float32)).reshape(1, -1)
-        top_n = min(max(k * 5, 50), n_docs)
-
-        bm25 = BM25Okapi([c.tokens for c in candidates])
-        bm25_scores = np.array(bm25.get_scores(RetrieverUtils.tokenize(query)))
-        bm25_idx = np.argsort(-bm25_scores)[:top_n]
-
+    # -------------------- Retrieve --------------------
+    def retrieve(
+        self,
+        query: str,
+        doc_ids: Optional[List[str]] = None,
+        top_k: int = 5,
+        debug: bool = False
+    ) -> RetrievalOutput:
         if not doc_ids:
-            D, I = self.faiss_indices[source_type].search(qv, top_n)
-            vec_idx, vec_scores = I[0], D[0]
-            valid = vec_idx < len(self.chunks[source_type])
-            vec_idx, vec_scores = vec_idx[valid], vec_scores[valid]
-            cand_idx = np.unique(np.concatenate([vec_idx, bm25_idx]))
-            v = np.array([vec_scores[list(vec_idx).index(idx)] if idx in vec_idx else 0.0 for idx in cand_idx])
-            b = np.array([bm25_scores[idx] if idx in bm25_idx else 0.0 for idx in cand_idx])
-        else:
-            cand_idx = bm25_idx
-            v, b = np.zeros(len(cand_idx)), bm25_scores[cand_idx]
+            raise ValueError("You must provide doc_ids. Agent cannot search outside given docs.")
 
-        hybrid_scores = alpha * v + (1 - alpha) * b
-        order = np.argsort(-hybrid_scores)[:min(k, len(cand_idx))]
+        # Step 1: Refine query
+        logging.info(f"[RETRIEVE] Refining query='{query}'")
+        try:
+            llm_resp = self.llm.invoke(self.refine_prompt.format(query=query))
+            refined_query = getattr(llm_resp, "content", str(llm_resp)).strip()
+        except Exception as e:
+            logging.exception(f"[REFINE] Error refining query: {e}")
+            refined_query = query  # fallback
+        logging.info(f"[REFINE] Original: '{query}' | Refined: '{refined_query}'")
 
-        results = []
-        for idx_pos in order:
-            idx = int(cand_idx[idx_pos])
-            chunk = candidates[idx]
-            clean_text = RetrieverUtils.filter_irrelevant_numbers(chunk.text)
-            if not clean_text:
+        # Step 2: Build tools
+        tools = self.build_tools(doc_ids, top_k=top_k)
+        logging.debug(f"[RETRIEVE] Built {len(tools)} tools")
+        if not tools:
+            raise RuntimeError("No valid tools could be built (maybe ingestion failed).")
+
+        # Step 3: Run agent
+        logging.info(f"[RETRIEVE] Running agent with refined query='{refined_query}'")
+        try:
+            agent = initialize_agent(
+                tools=tools,
+                llm=self.llm,
+                agent="zero-shot-react-description",
+                verbose=debug
+            )
+            agent_response = agent.run(refined_query)
+            logging.info(f"[AGENT] Response: {agent_response[:200]}...")
+        except Exception as e:
+            logging.exception(f"[AGENT] Error running agent: {e}")
+            agent_response = f"[ERROR] Agent failed: {e}"
+
+        # Step 4: Collect provenance directly
+        all_docs = []
+        for doc_id in doc_ids:
+            if doc_id not in doc_store:
+                logging.warning(f"[RETRIEVE] Skipping doc_id={doc_id}, not in doc_store")
                 continue
-            results.append({
-                "chunk_id": chunk.chunk_id,
-                "doc_id": chunk.doc_id,
-                "title": chunk.title,
-                "text": clean_text,
-                "score_hybrid": float(hybrid_scores[idx_pos]),
-                "meta": chunk.meta,
-            })
-        return results
+            doc_type = doc_store[doc_id]["type"]
+            logging.debug(f"[RETRIEVE] Direct retrieval for doc_id={doc_id}, query='{refined_query}'")
+            try:
+                retrieved = self.engine.retrieve(
+                    refined_query, doc_ids=[doc_id], source_type=doc_type, top_k=top_k
+                )
+                logging.debug(f"[RETRIEVE] Retrieved {len(retrieved)} chunks from {doc_id}")
+                all_docs.extend(retrieved)
+            except Exception as e:
+                logging.exception(f"[RETRIEVE] Error retrieving from {doc_id}: {e}")
 
-    # -------- Format for extractor --------
-    def format_for_extractor(self, query: str, source_type: str, run_id: str = None, k=5, alpha=0.5, doc_ids=None):
-        hits = self.retrieve(query, k=k, alpha=alpha, source_type=source_type, doc_ids=doc_ids)
-        if not hits:
-            return None
-
+        # Dedup & format evidence
+        seen_chunk_ids = set()
         evidence_chunks = []
-        for h in hits:
-            clean_text = RetrieverUtils.filter_irrelevant_numbers(h["text"])
-            if not clean_text:
+        for idx, doc in enumerate(all_docs[:top_k]):
+            cid = doc.metadata.get("chunk_id", f"{idx}")
+            if cid in seen_chunk_ids:
                 continue
+            seen_chunk_ids.add(cid)
             evidence_chunks.append(Evidence(
-                chunk_id=h["chunk_id"],
-                doc_id=h["doc_id"],
-                text=clean_text,
-                title=h.get("title"),
-                meta=h.get("meta", {}),
+                chunk_id=cid,
+                doc_id=doc.metadata.get("doc_id", f"unknown::{idx}"),
+                text=doc.page_content,
+                meta=doc.metadata,
+                title=doc.metadata.get("title") or doc.metadata.get("source_path")
             ))
 
-        if len(evidence_chunks) < 3:
-            return None
+        provenance = {"retrieved_from": list({
+            doc.metadata.get("source_path", doc.metadata.get("title", "unknown"))
+            for doc in all_docs
+        })}
+        logging.info(f"[RETRIEVE] Returning {len(evidence_chunks)} evidence chunks")
 
-        import re
-        numeric_tokens = re.findall(r"\d+(\.\d+)?", " ".join([c.text for c in evidence_chunks]))
-        provenance = {
-            "alpha": alpha,
-            "k": k,
-            "embedding_model": EMBED_MODEL,
-            "source_type": source_type,
-            "chunks_indexed": len(self.chunks[source_type]),
-            "chunks_used": len(evidence_chunks),
-        }
-        if len(set(numeric_tokens)) < 2:
-            provenance["force_test"] = "descriptive"
-
-        return RetrievalOutput(
-            run_id=run_id or str(uuid.uuid4()),
-            query=query,
-            evidence_chunks=evidence_chunks,
-            provenance=provenance,
-        )
-engine = RetrieverEngine()
+        return RetrievalOutput(query=query, evidence_chunks=evidence_chunks, provenance=provenance)

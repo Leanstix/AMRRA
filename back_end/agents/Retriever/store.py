@@ -1,40 +1,55 @@
 import os
 import pickle
 import numpy as np
-import logging
-from rank_bm25 import BM25Okapi
 from .config import PERSIST_DIR
 from .schema import Chunk
+
 
 class RetrieverPersistence:
 
     @staticmethod
-    def save(chunks, sources):
-        meta = {"chunks": {src: [c.__dict__ for c in chunks[src]] for src in sources}}
-        with open(os.path.join(PERSIST_DIR, "meta.pkl"), "wb") as f:
-            pickle.dump(meta, f)
-        logging.info("Retriever state saved.")
+    def _get_file_path(doc_id: str, source_type: str):
+        """
+        Ensure unique file naming by including source_type.
+        Example: <persist_dir>/<doc_id>__<source_type>.pkl
+        """
+        os.makedirs(PERSIST_DIR, exist_ok=True)
+        return os.path.join(PERSIST_DIR, f"{doc_id}__{source_type}.pkl")
 
     @staticmethod
-    def load(chunks, faiss_indices, bm25, texts_for_bm25, sources):
-        path = os.path.join(PERSIST_DIR, "meta.pkl")
+    def save_chunk(chunk: Chunk, doc_id: str, source_type: str):
+        """
+        Save a chunk into its corresponding file.
+        """
+        path = RetrieverPersistence._get_file_path(doc_id, source_type)
+
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+        else:
+            data = {"chunks": []}
+
+        data["chunks"].append(chunk.__dict__)
+
+        with open(path, "wb") as f:
+            pickle.dump(data, f)
+
+    @staticmethod
+    def load_doc(doc_id: str, source_type: str):
+        """
+        Load all chunks for a given (doc_id, source_type).
+        """
+        path = RetrieverPersistence._get_file_path(doc_id, source_type)
         if not os.path.exists(path):
-            logging.warning("No retriever state found.")
-            return
+            return []
 
         with open(path, "rb") as f:
-            meta = pickle.load(f)
+            data = pickle.load(f)
 
-        for src in sources:
-            chunks[src] = []
-            for c in meta.get("chunks", {}).get(src, []):
-                chunk = Chunk(**c)
-                if chunk.vector is not None:
-                    chunk.vector = np.array(chunk.vector, dtype=np.float32)
-                    faiss_indices[src].add(chunk.vector.reshape(1, -1))
-                if chunk.tokens:
-                    texts_for_bm25[src].append(chunk.tokens)
-                chunks[src].append(chunk)
-            if texts_for_bm25[src]:
-                bm25[src] = BM25Okapi(texts_for_bm25[src])
-        logging.info("Retriever metadata loaded.")
+        chunks = []
+        for c in data.get("chunks", []):
+            chunk = Chunk(**c)
+            if chunk.vector is not None:
+                chunk.vector = np.array(chunk.vector, dtype=np.float32)
+            chunks.append(chunk)
+        return chunks

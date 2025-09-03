@@ -1,12 +1,13 @@
-# Agents/Pipeline/pipeline.py
 import re
 import uuid
 from fastapi import APIRouter
-from typing import Union
+from typing import Union, List
+import logging
 
 from model.retriever_model import RetrieveRequest
 from model.extractor_model import Evidence, RetrievalOutput, ExtractionOutput, ExtractionError
-from agents.Retriever.retriever import engine
+from agents.Retriever.retriever import RetrieverAgent
+from agents.Retriever.retriever_engine import RetrieverEngine
 from agents.Extractor.run_extraction import run_extraction
 from agents.experimentation.tasks import run_experiment_task
 from agents.experimentation.models import TwoSampleInput, ExperimentOutput
@@ -17,6 +18,21 @@ from celery_app import celery_app
 import time
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
+logging.basicConfig(level=logging.INFO)
+
+
+def clean_text(text: str, max_len=1000) -> str:
+    """Clean and normalize text chunks."""
+    text = re.sub(r"(Cached - Similar pages.*|Search Preferences.*|Next Search.*)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()[:max_len]
+    if text:
+        text = re.sub(r"\bISBN[- ]?\d+\b", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b\d{4}\b", "", text)
+        text = re.sub(r"\b\d+(\.\d+)?\s*(cm|kg|lbs|in|mm)\b", "", text)
+        text = re.sub(r"\b[A-Z0-9]{8,}\b", "", text)
+        text = re.sub(r"\b\d{5,}\b", "", text)
+    return text
+
 
 def map_extraction_to_experiment_input(hypothesis_obj):
     valid_groups = [g for g in hypothesis_obj.get("groups_raw", []) if g["data"]]
@@ -27,6 +43,7 @@ def map_extraction_to_experiment_input(hypothesis_obj):
         "groups_raw": [{"name": g["name"], "values": g["data"]} for g in valid_groups]
     }
 
+
 @router.post("/final", response_model=dict)
 async def pipeline_run(req: RetrieveRequest):
     """
@@ -36,7 +53,7 @@ async def pipeline_run(req: RetrieveRequest):
     3. For each hypothesis, run experiment via Celery.
     4. Pass all experiment results to judging agent for final report.
     """
-    all_results = []
+    all_results: List[dict] = []
 
     # --- Step 1: Collect raw chunks ---
     if req.pdfs:
@@ -64,10 +81,29 @@ async def pipeline_run(req: RetrieveRequest):
         if isinstance(section_filters, str):
             section_filters = [s.strip() for s in section_filters.split(",")]
 
-        for src in section_filters:
-            all_results.extend(
-                engine.retrieve(query=req.query, k=req.k, alpha=req.alpha, source_type=src)
-            )
+        sources = section_filters or list(RetrieverEngine.SOURCES)
+        doc_ids = req.doc_ids if hasattr(req, "doc_ids") and req.doc_ids else None
+        agent = RetrieverAgent()
+        for src in sources:
+            logging.info(f"Retrieving from source: {src}, doc_ids: {doc_ids}")
+            try:
+                retrieved = agent.retrieve(
+                    query=req.query,
+                    top_k=req.k if hasattr(req, "k") else 5,
+                    doc_ids=doc_ids,
+                )
+            except Exception as e:
+                logging.error(f"Error retrieving from engine: {e}")
+                continue
+
+            for r in retrieved.evidence_chunks:
+                all_results.append({
+                    "chunk_id": getattr(r, "chunk_id", str(uuid.uuid4())),
+                    "doc_id": r.doc_id,
+                    "title": getattr(r, "title", ""),
+                    "text": getattr(r, "text", ""),
+                    "meta": getattr(r, "meta", {})
+                })
 
     if not all_results:
         return {
@@ -79,22 +115,8 @@ async def pipeline_run(req: RetrieveRequest):
     # --- Step 2: Clean chunks ---
     cleaned_chunks = []
     for c in all_results:
-        text = re.sub(
-            r"(Cached - Similar pages.*|Search Preferences.*|Next Search.*)",
-            "",
-            c["text"],
-            flags=re.IGNORECASE
-        )
-        text = re.sub(r"\s+", " ", text).strip()[:1000]
-
+        text = clean_text(c["text"])
         if text:
-            # Drop irrelevant numeric noise
-            text = re.sub(r"\bISBN[- ]?\d+\b", "", text, flags=re.IGNORECASE)
-            text = re.sub(r"\b\d{4}\b", "", text)
-            text = re.sub(r"\b\d+(\.\d+)?\s*(cm|kg|lbs|in|mm)\b", "", text)
-            text = re.sub(r"\b[A-Z0-9]{8,}\b", "", text)
-            text = re.sub(r"\b\d{5,}\b", "", text)
-
             cleaned_chunks.append({
                 "chunk_id": c["chunk_id"],
                 "doc_id": c["doc_id"],
@@ -103,10 +125,10 @@ async def pipeline_run(req: RetrieveRequest):
                 "meta": c.get("meta", {})
             })
 
-    if len(cleaned_chunks) < 3:
+    if len(cleaned_chunks) < 1:
         return {
             "status": "error",
-            "error": "Need at least 3 non-empty evidence chunks",
+            "error": "No usable evidence chunks",
             "reason_code": "MISSING_DATA"
         }
 
