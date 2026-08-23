@@ -19,8 +19,9 @@ jobs:
           cache: pip
           cache-dependency-path: back_end/requirements*.txt
       - run: pip install -r requirements-dev.txt
-      - run: python -m compileall -q app main.py worker.py
+      - run: python -m compileall -q app evals main.py worker.py
       - run: pytest --cov=app --cov-report=term-missing --cov-fail-under=85 -q
+      - run: python -m evals.runner
 
   frontend:
     runs-on: ubuntu-latest
