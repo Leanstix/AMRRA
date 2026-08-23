@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation"
 
-export default function LegacyResultsPage() {
+export default function LegacyExperimentPlanPage() {
   redirect("/")
 }

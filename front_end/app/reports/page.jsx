@@ -1,5 +1,5 @@
-import { ReportsPage } from "../../components/reports/reports-page";
+import { redirect } from "next/navigation"
 
-export default function Reports() {
-  return <ReportsPage />;
+export default function LegacyReportsPage() {
+  redirect("/")
 }
