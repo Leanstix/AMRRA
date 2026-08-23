@@ -1,25 +1,30 @@
+from __future__ import annotations
+
 from fastapi import FastAPI
-from dotenv import load_dotenv
-from agents.routers.retriver_route import retriever_router
-from agents.routers.extractor_route import extractor_router
-from agents.routers.pipeline import router as pipeline_router
-from agents.routers.experimentation_router import experimentation_router
-from agents.routers.judging_router import judging_router
+from fastapi.middleware.cors import CORSMiddleware
 
-load_dotenv()
+from app.api.health import router as health_router
+from app.api.runs import router as runs_router
+from app.core.config import get_settings
 
-app = FastAPI()
+settings = get_settings()
 
-
-
-app.include_router(retriever_router)
-app.include_router(extractor_router)
-app.include_router(pipeline_router)
-app.include_router(experimentation_router)
-app.include_router(judging_router)
+app = FastAPI(
+    title="AMRRA Agent API",
+    version="2.0.0",
+    description="Automated Machine Learning Research Reproducibility Assistant",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+app.include_router(health_router, prefix=settings.api_prefix)
+app.include_router(runs_router, prefix=settings.api_prefix)
 
 
 @app.get("/")
-def read_root():
-    return {"message": "Back end for the Automated Machine learning Research Reproducibility Assistant!"}
-
+def root():
+    return {"name": settings.app_name, "version": "2.0.0", "docs": "/docs"}
