@@ -76,11 +76,14 @@ class AgentOrchestrator:
                 prompt_version=EXTRACTOR_PROMPT_VERSION,
             ) as extraction_trace:
                 extraction = await self.extractor.run(request.query, evidence)
-                if not extraction.hypotheses:
-                    raise PipelineError("NO_SUPPORTED_HYPOTHESIS", "The agent found no evidence-backed hypothesis")
                 self.repository.patch_state(run_id, extraction=extraction.model_dump(mode="json"))
                 extraction_trace["output"] = extraction.model_dump(mode="json")
-                extraction_trace["metadata"] = {"provider": self.provider.provider_name}
+                extraction_trace["metadata"] = {
+                    "provider": self.provider.provider_name,
+                    "grounded_hypotheses": len(extraction.hypotheses),
+                    "evidence_only_fallback": not bool(extraction.hypotheses),
+                    **self.extractor.last_diagnostics,
+                }
 
             with self.traces.stage(
                 run_id,
@@ -90,7 +93,10 @@ class AgentOrchestrator:
                 plans = self.planner.plan(extraction.hypotheses)
                 self.repository.patch_state(run_id, plans=[plan.model_dump(mode="json") for plan in plans])
                 planning_trace["output"] = [plan.model_dump(mode="json") for plan in plans]
-                planning_trace["metadata"] = {"tool_calls": [plan.test for plan in plans]}
+                planning_trace["metadata"] = {
+                    "tool_calls": [plan.test for plan in plans],
+                    "evidence_only_fallback": not bool(plans),
+                }
 
             with self.traces.stage(
                 run_id,
@@ -108,6 +114,7 @@ class AgentOrchestrator:
                 experiment_trace["metadata"] = {
                     "completed": sum(item.status == "completed" for item in experiments),
                     "insufficient": sum(item.status == "insufficient_data" for item in experiments),
+                    "evidence_only_fallback": not bool(experiments),
                 }
 
             with self.traces.stage(
@@ -120,7 +127,10 @@ class AgentOrchestrator:
                 report = await self.judge.run(request.query, evidence, experiments)
                 self.repository.patch_state(run_id, report=report.model_dump(mode="json"))
                 judge_trace["output"] = report.model_dump(mode="json")
-                judge_trace["metadata"] = {"provider": self.provider.provider_name}
+                judge_trace["metadata"] = {
+                    "provider": self.provider.provider_name,
+                    "evidence_only_fallback": not bool(experiments),
+                }
 
             self.repository.set_status(run_id, RunStatus.COMPLETED)
         except Exception as exc:
