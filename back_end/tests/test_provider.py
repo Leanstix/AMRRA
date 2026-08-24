@@ -20,6 +20,11 @@ class Payload(BaseModel):
     nested: NestedPayload | None = None
 
 
+class DefaultedPayload(BaseModel):
+    answer: str
+    notes: str = ""
+
+
 class FakeResponse:
     def __init__(self, body, status_code=200, text=None):
         self.body = body
@@ -167,6 +172,90 @@ async def test_schema_validation_failure_is_retried(monkeypatch):
 
     assert result.answer == "fixed"
     assert len(FakeClient.requests) == 2
+    assert FakeClient.requests[1][3]["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_groq_failed_generation_missing_defaulted_field_recovers_without_retry_budget(monkeypatch):
+    """Regression for live Groq 400: strict output omitted ExtractionPayload.notes."""
+    FakeClient.responses = [
+        FakeResponse(
+            {
+                "error": {
+                    "message": (
+                        "Generated JSON does not match the expected schema. Please adjust your prompt. "
+                        "See 'failed_generation' for more details. Error: jsonschema: '' does not "
+                        "validate with /required: missing properties: 'notes'"
+                    ),
+                    "failed_generation": '{"answer":"recovered"}',
+                }
+            },
+            status_code=400,
+        ),
+        FakeResponse(
+            {"choices": [{"message": {"content": '{"answer":"recovered"}'}}]}
+        ),
+    ]
+    FakeClient.requests = []
+    monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
+
+    result = await provider(retries=0).structured(
+        system="system",
+        user="json",
+        schema=DefaultedPayload,
+    )
+
+    assert result.answer == "recovered"
+    assert result.notes == ""
+    assert len(FakeClient.requests) == 2
+    assert FakeClient.requests[0][3]["response_format"]["type"] == "json_schema"
+    assert FakeClient.requests[0][3]["response_format"]["json_schema"]["strict"] is True
+    assert FakeClient.requests[1][3]["response_format"] == {"type": "json_object"}
+    assert "compatibility recovery" in FakeClient.requests[1][3]["messages"][0]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_json_object_recovery_still_requires_local_pydantic_validation(monkeypatch):
+    FakeClient.responses = [
+        FakeResponse(
+            {
+                "error": {
+                    "message": "Generated JSON does not match the expected schema. Error: jsonschema mismatch",
+                    "failed_generation": '{"wrong":"shape"}',
+                }
+            },
+            status_code=400,
+        ),
+        FakeResponse({"choices": [{"message": {"content": '{"wrong":"shape"}'}}]}),
+        FakeResponse(
+            {"choices": [{"message": {"content": '{"answer":"fixed","nested":null}'}}]}
+        ),
+    ]
+    FakeClient.requests = []
+    monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(groq_module.asyncio, "sleep", lambda *args, **kwargs: _noop())
+
+    result = await provider(retries=1).structured(system="system", user="json", schema=Payload)
+
+    assert result.answer == "fixed"
+    assert len(FakeClient.requests) == 3
+    assert FakeClient.requests[1][3]["response_format"] == {"type": "json_object"}
+    assert FakeClient.requests[2][3]["response_format"] == {"type": "json_object"}
+    assert "previous local validation issues" in FakeClient.requests[2][3]["messages"][0]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_groq_400_remains_permanent(monkeypatch):
+    FakeClient.responses = [
+        FakeResponse({"error": {"message": "Malformed request payload"}}, status_code=400)
+    ]
+    FakeClient.requests = []
+    monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(AgentProviderError, match="HTTP 400"):
+        await provider(retries=3).structured(system="system", user="json", schema=Payload)
+
+    assert len(FakeClient.requests) == 1
 
 
 async def _noop():
