@@ -26,7 +26,15 @@ class Settings(BaseSettings):
     )
     llm_model: str = Field(default="openai/gpt-oss-20b", alias="LLM_MODEL")
     llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")
-    llm_max_completion_tokens: int = Field(default=4096, alias="LLM_MAX_COMPLETION_TOKENS")
+
+    # Free/developer Groq accounts can have an 8K combined TPM ceiling. Keep the
+    # generic ceiling conservative and let each agent stage reserve only what it
+    # actually needs. These are output reservations, not context-window limits.
+    llm_max_completion_tokens: int = Field(default=2048, alias="LLM_MAX_COMPLETION_TOKENS")
+    llm_rerank_max_completion_tokens: int = Field(default=512, alias="LLM_RERANK_MAX_COMPLETION_TOKENS")
+    llm_extractor_max_completion_tokens: int = Field(default=1400, alias="LLM_EXTRACTOR_MAX_COMPLETION_TOKENS")
+    llm_judge_max_completion_tokens: int = Field(default=1000, alias="LLM_JUDGE_MAX_COMPLETION_TOKENS")
+    llm_reasoning_effort: str = Field(default="low", alias="LLM_REASONING_EFFORT")
 
     agent_timeout_seconds: float = 45.0
     agent_max_retries: int = 2
