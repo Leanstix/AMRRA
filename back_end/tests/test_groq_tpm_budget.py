@@ -12,15 +12,21 @@ class Payload(BaseModel):
 
 
 class FakeResponse:
-    def __init__(self, body, status_code=200):
+    def __init__(self, body, status_code=200, headers=None):
         self.body = body
         self.status_code = status_code
         self.text = ""
+        self.headers = headers or {}
 
     def raise_for_status(self):
         if self.status_code >= 400:
             request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
-            response = httpx.Response(self.status_code, request=request, json=self.body)
+            response = httpx.Response(
+                self.status_code,
+                request=request,
+                json=self.body,
+                headers=self.headers,
+            )
             raise httpx.HTTPStatusError("error", request=request, response=response)
 
     def json(self):
@@ -99,3 +105,29 @@ async def test_413_tpm_error_reduces_completion_reservation_and_retries(monkeypa
     assert FakeClient.requests[0]["max_completion_tokens"] == 1000
     assert FakeClient.requests[1]["max_completion_tokens"] == 309
     assert FakeClient.requests[0]["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_429_uses_groq_retry_after_header_before_retry(monkeypatch):
+    FakeClient.responses = [
+        FakeResponse(
+            {"error": {"message": "rate limit exceeded"}},
+            status_code=429,
+            headers={"retry-after": "12.5"},
+        ),
+        FakeResponse({"choices": [{"message": {"content": '{"answer":"ok"}'}}]}),
+    ]
+    FakeClient.requests = []
+    sleeps = []
+
+    async def capture_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(groq_module.asyncio, "sleep", capture_sleep)
+
+    result = await _provider().structured(system="system", user="user", schema=Payload)
+
+    assert result.answer == "ok"
+    assert len(FakeClient.requests) == 2
+    assert sleeps == [12.5]
