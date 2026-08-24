@@ -9,22 +9,24 @@ AMRRA is an agentic research system that turns a research question and source ev
 ```text
 Source ingestion
     ↓
-Retriever (lexical shortlist + Groq/Llama semantic reranking)
+Retriever (lexical shortlist + Groq/GPT-OSS semantic reranking)
     ↓
-Extractor Agent (Groq/Llama, schema-validated evidence + hypotheses)
+Extractor Agent (Groq/GPT-OSS, strict schema-constrained evidence + hypotheses)
     ↓
 Experiment Planner (deterministic tool precondition checks)
     ↓
 Deterministic Statistical Toolbox
     ↓
-Judge Agent (Groq/Llama, evidence-cited synthesis)
+Judge Agent (Groq/GPT-OSS, evidence-cited synthesis)
 ```
 
-Groq is the **only production LLM provider**, using `llama-3.1-8b-instant` by default through Groq's OpenAI-compatible Chat Completions API. AMRRA does not silently switch to another provider. If LLM reranking is temporarily unavailable, retrieval degrades to deterministic lexical ranking; extraction and judging fail explicitly rather than fabricating output.
+Groq is the **only production LLM provider**, using `openai/gpt-oss-20b` by default through Groq's OpenAI-compatible Chat Completions API. AMRRA does not silently switch providers. If LLM reranking is temporarily unavailable, retrieval degrades to deterministic lexical ranking; extraction and judging fail explicitly rather than fabricating output.
 
-Groq JSON Object Mode is used for model responses. The requested Pydantic schema is included in the system instruction, and every response is validated before entering trusted application state. JSON syntax alone is never treated as proof of schema or semantic correctness.
+`openai/gpt-oss-20b` is Groq's production replacement for `llama-3.1-8b-instant`, which Groq shut down for free/developer tiers on 2026-08-16. For compatibility with an older local `.env`, AMRRA maps that one known retired model ID to `openai/gpt-oss-20b` and logs the migration. New configuration should always use the replacement model explicitly.
 
-Every stage writes a durable trace containing status, latency, model/prompt version, input/output hashes, errors and tool metadata. Model outputs are treated as untrusted until Pydantic validates them.
+Groq strict JSON Schema mode is used for probabilistic stage outputs. AMRRA converts each Pydantic response contract into a closed, fully-required Groq-compatible schema, Groq constrains generation to that schema, and Pydantic validates the result again before it enters trusted application state.
+
+Every stage writes a durable trace containing status, latency, model/prompt version, input/output hashes, errors and tool metadata. Model outputs are treated as untrusted until validated.
 
 ### Scientific integrity rules
 
@@ -43,7 +45,7 @@ Supported deterministic tools currently include:
 - **FastAPI**: run creation, PDF ingestion, status and health endpoints
 - **PostgreSQL**: durable run state and stage traces
 - **Redis + Celery**: production job dispatch and worker isolation
-- **Groq OpenAI-compatible API**: Llama retrieval reranking, extraction and judging
+- **Groq OpenAI-compatible API**: GPT-OSS retrieval reranking, extraction and judging
 - **Next.js 14**: real workbench wired to the run API
 - **Alembic**: database migrations
 - **Docker Compose**: reproducible local production topology
@@ -63,7 +65,7 @@ cp .env.example .env
 LLM_PROVIDER=groq
 LLM_API_STYLE=openai_chat
 LLM_BASE_URL=https://api.groq.com/openai/v1
-LLM_MODEL=llama-3.1-8b-instant
+LLM_MODEL=openai/gpt-oss-20b
 LLM_API_KEY=your_groq_key
 LLM_MAX_COMPLETION_TOKENS=4096
 ```
@@ -77,7 +79,7 @@ cd back_end
 PYTHONPATH=. python -m app.providers.diagnostics
 ```
 
-The diagnostic checks authentication and confirms that the configured model is visible without printing the API key.
+The diagnostic checks authentication, reports both the requested and effective model, confirms that the effective model is visible to the key, and never prints the API key.
 
 4. Start the production-shaped stack:
 
@@ -102,7 +104,7 @@ pip install -r requirements-dev.txt
 export LLM_PROVIDER=groq
 export LLM_API_STYLE=openai_chat
 export LLM_BASE_URL=https://api.groq.com/openai/v1
-export LLM_MODEL=llama-3.1-8b-instant
+export LLM_MODEL=openai/gpt-oss-20b
 export LLM_API_KEY=your_groq_key
 export CELERY_BROKER_URL=redis://127.0.0.1:6379/0
 ```
@@ -165,9 +167,9 @@ At least one source is required. Production returns `202 Accepted`; the client p
 - CORS is explicit and environment-controlled.
 - Groq credentials are environment-only and are never exposed to the frontend.
 - Provider error messages redact the configured API key.
-- 401/403 and other permanent 4xx failures fail fast instead of burning retry budget.
+- 401/403/404 and other permanent 4xx failures fail fast instead of burning retry budget.
 - Agent provider errors are typed run failures; the system never inserts fake hypotheses to keep the pipeline alive.
 
 ## Test strategy
 
-Tests cover schema invariants, LLM reranking constraints/fallback, planner tool-selection rules, statistical branches, hallucinated citation filtering, Groq request/response validation, authentication failure semantics, model discovery, SSRF controls, persistence, failed traces, API validation and a full end-to-end agent run using a deterministic fake provider. The fake provider exists only for tests/offline evals; production has one provider: Groq.
+Tests cover schema invariants, strict Groq structured-output contracts, deprecated-model migration, LLM reranking constraints/fallback, planner tool-selection rules, statistical branches, hallucinated citation filtering, Groq request/response validation, authentication/model failure semantics, model discovery, SSRF controls, persistence, failed traces, API validation and a full end-to-end agent run using a deterministic fake provider. The fake provider exists only for tests/offline evals; production has one provider: Groq.
