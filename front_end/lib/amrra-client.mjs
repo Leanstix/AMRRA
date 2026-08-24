@@ -2,6 +2,14 @@ export const API_BASE = (process.env.NEXT_PUBLIC_AMRRA_API_URL || "http://localh
 
 export const STAGE_ORDER = ["ingestion", "retrieval", "extraction", "planning", "experimentation", "judging"]
 
+const HTTP_URL_PATTERN = /https?:\/\/[^\s<>"']+/gi
+const TRAILING_URL_PUNCTUATION = /[.,!?;:\]\)}]+$/
+
+export function extractHttpUrls(value = "") {
+  const matches = String(value).match(HTTP_URL_PATTERN) || []
+  return [...new Set(matches.map((url) => url.replace(TRAILING_URL_PUNCTUATION, "")).filter(Boolean))]
+}
+
 export async function createRun({ query, url, text, file, topK = 8 }) {
   const form = new FormData()
   form.append("query", query)
