@@ -9,9 +9,12 @@ from pydantic import BaseModel, Field
 
 from app.domain.schemas import EvidenceChunk, SourceInput
 from app.providers.base import AgentProvider
+from app.services.prompt_budget import pack_evidence
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
-RETRIEVER_PROMPT_VERSION = "retriever-v2.4-groq-gptoss20b"
+_RERANK_EVIDENCE_CHAR_BUDGET = 8_000
+_RERANK_CHUNK_CHAR_BUDGET = 550
+RETRIEVER_PROMPT_VERSION = "retriever-v2.5-groq-budgeted"
 
 
 class _RerankItem(BaseModel):
@@ -54,12 +57,7 @@ def lexical_score(query: str, text: str) -> float:
 
 
 class Retriever:
-    """Two-phase retrieval: deterministic candidate generation plus LLM reranking.
-
-    The LLM cannot introduce evidence: it can only score chunk IDs from the lexical
-    shortlist. If Groq reranking is temporarily unavailable, AMRRA degrades to
-    deterministic lexical ranking rather than switching providers.
-    """
+    """Deterministic candidate generation followed by bounded LLM reranking."""
 
     def __init__(self, provider: AgentProvider | None = None):
         self.provider = provider
@@ -90,42 +88,47 @@ class Retriever:
         shortlist_size = min(len(candidates), max(top_k * 3, top_k))
         shortlist = candidates[:shortlist_size]
 
-        if (
-            self.provider
-            and getattr(self.provider, "rerank_enabled", True)
-            and len(shortlist) > 1
-        ):
+        if self.provider and getattr(self.provider, "rerank_enabled", True) and len(shortlist) > 1:
+            packed, budget = pack_evidence(
+                shortlist,
+                total_chars=_RERANK_EVIDENCE_CHAR_BUDGET,
+                per_chunk_chars=_RERANK_CHUNK_CHAR_BUDGET,
+            )
+            lexical_by_id = {
+                item.chunk_id: float(item.metadata["lexical_score"])
+                for item in shortlist
+            }
+            rerank_candidates = [
+                {**item, "lexical_score": lexical_by_id[item["chunk_id"]]}
+                for item in packed
+            ]
             system = (
                 "You are AMRRA's retrieval reranking agent. Score how directly each supplied evidence chunk helps "
-                "answer the research question. Use only supplied chunk_id values. Do not infer new facts, do not "
-                "rewrite evidence, and do not include chunk IDs that were not provided. Relevance is 0 to 1."
+                "answer the research question. Use only supplied chunk_id values. Do not infer new facts, rewrite "
+                "evidence, or include unknown IDs. Relevance is 0 to 1. Keep reasons short."
             )
             user = json.dumps(
                 {
                     "research_question": query,
-                    "candidates": [
-                        {
-                            "chunk_id": item.chunk_id,
-                            "title": item.source_title,
-                            "text": item.text,
-                            "lexical_score": item.metadata["lexical_score"],
-                        }
-                        for item in shortlist
-                    ],
+                    "candidates": rerank_candidates,
+                    "prompt_budget": budget,
                 },
                 ensure_ascii=False,
+                separators=(",", ":"),
             )
             try:
                 reranked = await self.provider.structured(
                     system=system,
                     user=user,
                     schema=_RerankPayload,
+                    max_completion_tokens=getattr(self.provider, "rerank_max_completion_tokens", 512),
                 )
                 allowed = {item.chunk_id: item for item in shortlist}
+                packed_ids = {item["chunk_id"] for item in packed}
                 seen: set[str] = set()
                 for rank, result in enumerate(reranked.rankings, start=1):
                     item = allowed.get(result.chunk_id)
-                    if item is None or result.chunk_id in seen:
+                    if item is None or result.chunk_id not in packed_ids or result.chunk_id in seen:
                         continue
                     seen.add(result.chunk_id)
                     lexical = float(item.metadata["lexical_score"])
@@ -135,6 +138,7 @@ class Retriever:
                             "agent_relevance": result.relevance,
                             "agent_reason": result.reason,
                             "agent_rank": rank,
+                            "rerank_context_chars": budget["evidence_chars"],
                         }
                     )
             except Exception as exc:
