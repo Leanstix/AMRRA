@@ -15,21 +15,17 @@ from app.providers.base import AgentProviderError
 T = TypeVar("T", bound=BaseModel)
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 _SCHEMA_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
+_TPM_LIMIT_RE = re.compile(r"Limit\s+([\d,]+),\s*Requested\s+([\d,]+)", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS = {408, 409, 425, 429}
 _DEPRECATED_MODEL_REPLACEMENTS = {
-    # Groq shut this model down for free/developer tiers on 2026-08-16.
     "llama-3.1-8b-instant": "openai/gpt-oss-20b",
 }
+_MIN_COMPLETION_TOKENS = 192
+_TPM_SAFETY_MARGIN = 384
 
 
 def _strictify_schema(value: Any) -> Any:
-    """Convert Pydantic JSON Schema into Groq strict-mode compatible schema.
-
-    Groq strict structured outputs require every object property to be present in
-    `required` and every object to set `additionalProperties: false`. Optional
-    values remain nullable through Pydantic's `anyOf` representation; they are
-    simply required to be present as either their value or null.
-    """
+    """Convert Pydantic JSON Schema into Groq strict-mode compatible schema."""
     if isinstance(value, list):
         return [_strictify_schema(item) for item in value]
     if not isinstance(value, dict):
@@ -52,14 +48,31 @@ def _schema_name(schema: type[BaseModel]) -> str:
     return (name or "amrra_response")[:64]
 
 
-class GroqProvider:
-    """Groq-backed OpenAI-compatible provider for AMRRA's probabilistic stages.
+def _reduced_completion_cap(detail: str, current_cap: int) -> int | None:
+    """Reduce output reservation when Groq says a request cannot fit its TPM cap.
 
-    AMRRA defaults to `openai/gpt-oss-20b`, Groq's production replacement for
-    the retired Llama 3.1 8B model. GPT-OSS supports strict JSON Schema mode;
-    model output is constrained by Groq and still validated again by Pydantic at
-    AMRRA's trust boundary.
+    Groq's 413 TPM response reports the organization limit and the tokens the
+    request would reserve. We preserve the prompt and reduce only the completion
+    reservation, leaving a safety margin so tokenizer/accounting differences do
+    not immediately trigger the same rejection again.
     """
+    if "TPM" not in detail.upper() and "TOKENS PER MINUTE" not in detail.upper():
+        return None
+    match = _TPM_LIMIT_RE.search(detail)
+    if not match:
+        fallback = max(_MIN_COMPLETION_TOKENS, current_cap // 2)
+        return fallback if fallback < current_cap else None
+
+    limit = int(match.group(1).replace(",", ""))
+    requested = int(match.group(2).replace(",", ""))
+    overflow = max(0, requested - limit)
+    target = current_cap - overflow - _TPM_SAFETY_MARGIN
+    target = max(_MIN_COMPLETION_TOKENS, target)
+    return target if target < current_cap else None
+
+
+class GroqProvider:
+    """Groq-backed OpenAI-compatible provider for AMRRA's probabilistic stages."""
 
     rerank_enabled = True
 
@@ -87,6 +100,12 @@ class GroqProvider:
         self.timeout = settings.agent_timeout_seconds
         self.max_retries = settings.agent_max_retries
         self.max_completion_tokens = settings.llm_max_completion_tokens
+        self.rerank_max_completion_tokens = settings.llm_rerank_max_completion_tokens
+        self.extractor_max_completion_tokens = settings.llm_extractor_max_completion_tokens
+        self.judge_max_completion_tokens = settings.llm_judge_max_completion_tokens
+        self.reasoning_effort = settings.llm_reasoning_effort.strip().lower()
+        if self.reasoning_effort not in {"low", "medium", "high"}:
+            raise AgentProviderError("LLM_REASONING_EFFORT must be low, medium, or high")
 
     @property
     def key_fingerprint(self) -> str:
@@ -196,8 +215,17 @@ class GroqProvider:
             else f"Configured model '{self.model_name}' was not returned by /models",
         }
 
-    async def structured(self, *, system: str, user: str, schema: type[T]) -> T:
+    async def structured(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[T],
+        max_completion_tokens: int | None = None,
+    ) -> T:
         strict_schema = _strictify_schema(schema.model_json_schema())
+        completion_cap = max_completion_tokens or self.max_completion_tokens
+        completion_cap = max(_MIN_COMPLETION_TOKENS, int(completion_cap))
         payload = {
             "model": self.model_name,
             "messages": [
@@ -220,7 +248,8 @@ class GroqProvider:
                 },
             },
             "temperature": 0,
-            "max_completion_tokens": self.max_completion_tokens,
+            "reasoning_effort": self.reasoning_effort,
+            "max_completion_tokens": completion_cap,
         }
 
         last_error: Exception | None = None
@@ -241,6 +270,17 @@ class GroqProvider:
                     detail = self._safe_error_detail(exc.response)
                     suffix = f": {detail}" if detail else ""
                     last_error = AgentProviderError(f"Groq returned HTTP {status}{suffix}")
+
+                    if status == 413 and attempt < self.max_retries:
+                        reduced_cap = _reduced_completion_cap(
+                            detail,
+                            int(payload["max_completion_tokens"]),
+                        )
+                        if reduced_cap is not None:
+                            payload["max_completion_tokens"] = reduced_cap
+                            await asyncio.sleep(0.25)
+                            continue
+
                     retryable = status in _RETRYABLE_HTTP_STATUS or status >= 500
                     if not retryable:
                         raise last_error from exc
