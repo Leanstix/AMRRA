@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: amrra
+      POSTGRES_USER: amrra
+      POSTGRES_PASSWORD: amrra
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U amrra -d amrra"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./back_end
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://amrra:amrra@postgres:5432/amrra
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command: ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers"]
+    restart: unless-stopped
+
+  worker:
+    build: ./back_end
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://amrra:amrra@postgres:5432/amrra
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "worker.celery_app", "worker", "--loglevel=INFO", "--queues=amrra", "--concurrency=2"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./front_end
+      args:
+        NEXT_PUBLIC_AMRRA_API_URL: http://localhost:8000/api/v1
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

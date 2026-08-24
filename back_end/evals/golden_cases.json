@@ -1,0 +1,39 @@
+[
+  {
+    "case_id": "explicit-two-group-raw",
+    "query": "Do treatment and control groups differ in recovery score?",
+    "source": "The treatment group recovery scores were 8, 9, 10, 11, 12. The control group recovery scores were 2, 3, 4, 5, 6.",
+    "expected_test": "welch_ttest",
+    "expected_significant": true,
+    "extraction": {
+      "hypotheses": [{
+        "statement": "Treatment and control recovery scores differ",
+        "variables": ["recovery score"],
+        "confidence": 0.98,
+        "evidence_chunk_ids": ["source-1-chunk-1"],
+        "observations": [
+          {"name": "recovery score", "role": "outcome", "value_type": "raw_numeric", "group": "treatment", "values": [8, 9, 10, 11, 12], "evidence_chunk_ids": ["source-1-chunk-1"], "confidence": 0.99},
+          {"name": "recovery score", "role": "outcome", "value_type": "raw_numeric", "group": "control", "values": [2, 3, 4, 5, 6], "evidence_chunk_ids": ["source-1-chunk-1"], "confidence": 0.99}
+        ]
+      }],
+      "notes": ""
+    }
+  },
+  {
+    "case_id": "numbers-without-sample-semantics",
+    "query": "Can this excerpt support an inferential reproducibility test?",
+    "source": "The paper was published in 2024. It reports p = 0.04 and a 95 percent confidence interval, but does not provide raw observations, group summaries, or a contingency table.",
+    "expected_test": "descriptive",
+    "expected_significant": null,
+    "extraction": {
+      "hypotheses": [{
+        "statement": "The excerpt reports a statistically significant result but lacks reproducible sample data",
+        "variables": ["reported result"],
+        "confidence": 0.9,
+        "evidence_chunk_ids": ["source-1-chunk-1"],
+        "observations": []
+      }],
+      "notes": "No defensible statistical sample can be reconstructed from the excerpt."
+    }
+  }
+]
