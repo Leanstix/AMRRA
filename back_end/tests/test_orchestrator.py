@@ -78,6 +78,70 @@ async def test_full_agent_workflow_persists_traceable_results(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_empty_extraction_recovers_to_evidence_only_completed_run(tmp_path: Path):
+    primary_empty = {
+        "hypotheses": [],
+        "notes": "Primary extraction found no grounded hypothesis.",
+    }
+    recovery_empty = {
+        "hypotheses": [],
+        "notes": "Focused recovery also found no grounded hypothesis.",
+    }
+    judgement = {
+        "title": "Evidence-only assessment",
+        "summary": "The retrieved evidence is relevant, but no inferential hypothesis is defensible.",
+        "conclusion": "The run completes without fabricating a statistical test.",
+        "confidence": 0.6,
+        "limitations": ["insufficient structured observations"],
+        "citations": [
+            {"chunk_id": "source-1-chunk-1", "claim": "retrieved background evidence"}
+        ],
+    }
+    provider = FakeProvider([primary_empty, recovery_empty, judgement])
+    settings = Settings(
+        environment="test",
+        database_url=f"sqlite:///{tmp_path / 'evidence-only.db'}",
+        LLM_API_KEY="test",
+    )
+    repo = RunRepository(settings.database_url)
+    request = RunRequest(
+        query="What does this source support about the event?",
+        sources=[
+            SourceInput(
+                kind="text",
+                title="paper",
+                content=("The source provides contextual evidence about the event and its effects. " * 40),
+            )
+        ],
+        top_k=3,
+    )
+    repo.create_run("evidence-only", request.query, request.model_dump(mode="json"))
+    orchestrator = AgentOrchestrator(
+        repository=repo,
+        provider=provider,
+        ingestor=SourceIngestor(settings),
+    )
+
+    await orchestrator.run("evidence-only")
+
+    snapshot = repo.snapshot("evidence-only")
+    assert snapshot.status == RunStatus.COMPLETED
+    assert snapshot.extraction is not None
+    assert snapshot.extraction.hypotheses == []
+    assert snapshot.plans == []
+    assert snapshot.experiments == []
+    assert snapshot.report is not None
+    assert snapshot.report.title == "Evidence-only assessment"
+    extraction_trace = next(trace for trace in snapshot.traces if trace.stage.value == "extraction")
+    assert extraction_trace.metadata["evidence_only_fallback"] is True
+    assert extraction_trace.metadata["recovery_attempted"] is True
+    judging_trace = next(trace for trace in snapshot.traces if trace.stage.value == "judging")
+    assert judging_trace.metadata["evidence_only_fallback"] is True
+    assert len(provider.calls) == 3
+    repo.close()
+
+
+@pytest.mark.asyncio
 async def test_agent_failure_marks_run_failed_and_keeps_failed_trace(tmp_path: Path):
     provider = FakeProvider([])
     settings = Settings(
