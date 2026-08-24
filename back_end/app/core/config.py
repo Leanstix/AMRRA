@@ -16,13 +16,15 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./amrra.db"
 
     # One production LLM provider: Groq's OpenAI-compatible Chat Completions API.
+    # GPT-OSS 20B replaces llama-3.1-8b-instant, which Groq shut down for
+    # free/developer tiers on 2026-08-16.
     llm_provider: str = Field(default="groq", alias="LLM_PROVIDER")
     llm_api_style: str = Field(default="openai_chat", alias="LLM_API_STYLE")
     llm_base_url: str = Field(
         default="https://api.groq.com/openai/v1",
         alias="LLM_BASE_URL",
     )
-    llm_model: str = Field(default="llama-3.1-8b-instant", alias="LLM_MODEL")
+    llm_model: str = Field(default="openai/gpt-oss-20b", alias="LLM_MODEL")
     llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")
     llm_max_completion_tokens: int = Field(default=4096, alias="LLM_MAX_COMPLETION_TOKENS")
 
