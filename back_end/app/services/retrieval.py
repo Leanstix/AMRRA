@@ -11,7 +11,7 @@ from app.domain.schemas import EvidenceChunk, SourceInput
 from app.providers.base import AgentProvider
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
-RETRIEVER_PROMPT_VERSION = "retriever-v2.3-groq-llama31"
+RETRIEVER_PROMPT_VERSION = "retriever-v2.4-groq-gptoss20b"
 
 
 class _RerankItem(BaseModel):
