@@ -8,10 +8,10 @@ from collections import Counter
 from pydantic import BaseModel, Field
 
 from app.domain.schemas import EvidenceChunk, SourceInput
-from app.providers.agentrouter import AgentProvider
+from app.providers.base import AgentProvider
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
-RETRIEVER_PROMPT_VERSION = "retriever-v2.2-gpt56"
+RETRIEVER_PROMPT_VERSION = "retriever-v2.3-groq-llama31"
 
 
 class _RerankItem(BaseModel):
@@ -54,11 +54,11 @@ def lexical_score(query: str, text: str) -> float:
 
 
 class Retriever:
-    """Two-phase retrieval: deterministic candidate generation plus GPT reranking.
+    """Two-phase retrieval: deterministic candidate generation plus LLM reranking.
 
     The LLM cannot introduce evidence: it can only score chunk IDs from the lexical
-    shortlist. If AgentRouter is unavailable, AMRRA degrades to lexical ranking rather
-    than switching to another model/provider.
+    shortlist. If Groq reranking is temporarily unavailable, AMRRA degrades to
+    deterministic lexical ranking rather than switching providers.
     """
 
     def __init__(self, provider: AgentProvider | None = None):

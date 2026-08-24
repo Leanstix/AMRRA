@@ -14,7 +14,7 @@ from app.domain.schemas import (
     JudgeReport,
     Observation,
 )
-from app.providers.agentrouter import AgentProvider
+from app.providers.base import AgentProvider
 
 
 class _ObservationPayload(BaseModel):
@@ -55,8 +55,8 @@ class _JudgePayload(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
 
 
-EXTRACTOR_PROMPT_VERSION = "extractor-v2.2-gpt56"
-JUDGE_PROMPT_VERSION = "judge-v2.2-gpt56"
+EXTRACTOR_PROMPT_VERSION = "extractor-v2.3-groq-llama31"
+JUDGE_PROMPT_VERSION = "judge-v2.3-groq-llama31"
 
 
 class ExtractorAgent:

@@ -11,7 +11,7 @@ from app.infrastructure.repository import RunRepository
 
 def test_create_run_accepts_text_and_returns_202(monkeypatch, tmp_path: Path):
     repo = RunRepository(f"sqlite:///{tmp_path / 'api.db'}")
-    settings = Settings(environment="test", AGENTROUTER_API_KEY="test", EXECUTE_INLINE=False)
+    settings = Settings(environment="test", LLM_API_KEY="test", EXECUTE_INLINE=False)
     monkeypatch.setattr(runs_module, "get_repository", lambda: repo)
     monkeypatch.setattr(runs_module, "get_settings", lambda: settings)
     monkeypatch.setattr(runs_module, "dispatch_run", lambda run_id, background_tasks, settings: "test")
@@ -36,7 +36,7 @@ def test_create_run_accepts_text_and_returns_202(monkeypatch, tmp_path: Path):
 
 def test_create_run_rejects_request_without_source(monkeypatch, tmp_path: Path):
     repo = RunRepository(f"sqlite:///{tmp_path / 'api2.db'}")
-    settings = Settings(environment="test", AGENTROUTER_API_KEY="test")
+    settings = Settings(environment="test", LLM_API_KEY="test")
     monkeypatch.setattr(runs_module, "get_repository", lambda: repo)
     monkeypatch.setattr(runs_module, "get_settings", lambda: settings)
     app = FastAPI()
@@ -64,7 +64,7 @@ def test_get_run_and_not_found(monkeypatch, tmp_path: Path):
 
 def test_create_run_rejects_non_pdf_upload(monkeypatch, tmp_path: Path):
     repo = RunRepository(f"sqlite:///{tmp_path / 'api4.db'}")
-    settings = Settings(environment="test", AGENTROUTER_API_KEY="test")
+    settings = Settings(environment="test", LLM_API_KEY="test")
     monkeypatch.setattr(runs_module, "get_repository", lambda: repo)
     monkeypatch.setattr(runs_module, "get_settings", lambda: settings)
     app = FastAPI()

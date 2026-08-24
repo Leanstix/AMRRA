@@ -1,7 +1,7 @@
 import pytest
 
 from app.domain.schemas import SourceInput
-from app.providers.agentrouter import FakeProvider
+from app.providers.base import FakeProvider
 from app.services.retrieval import Retriever
 
 
@@ -15,7 +15,7 @@ def long_source() -> SourceInput:
 
 
 @pytest.mark.asyncio
-async def test_gpt_reranker_can_reorder_only_known_candidates():
+async def test_llm_reranker_can_reorder_only_known_candidates():
     provider = FakeProvider(
         [
             {

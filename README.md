@@ -9,18 +9,20 @@ AMRRA is an agentic research system that turns a research question and source ev
 ```text
 Source ingestion
     ↓
-Retriever (lexical shortlist + GPT-5.6 Sol semantic reranking)
+Retriever (lexical shortlist + Groq/Llama semantic reranking)
     ↓
-Extractor Agent (GPT-5.6 Sol, schema-validated evidence + hypotheses)
+Extractor Agent (Groq/Llama, schema-validated evidence + hypotheses)
     ↓
 Experiment Planner (deterministic tool precondition checks)
     ↓
 Deterministic Statistical Toolbox
     ↓
-Judge Agent (GPT-5.6 Sol, evidence-cited synthesis)
+Judge Agent (Groq/Llama, evidence-cited synthesis)
 ```
 
-GPT-5.6 Sol is the **only production LLM**. All model traffic is sent through AgentRouter's OpenAI-compatible API; AMRRA does not contact OpenAI directly and does not fall back to a second model. If AgentRouter reranking is temporarily unavailable, retrieval degrades to deterministic lexical ranking, while extraction/judging fail explicitly rather than silently switching providers.
+Groq is the **only production LLM provider**, using `llama-3.1-8b-instant` by default through Groq's OpenAI-compatible Chat Completions API. AMRRA does not silently switch to another provider. If LLM reranking is temporarily unavailable, retrieval degrades to deterministic lexical ranking; extraction and judging fail explicitly rather than fabricating output.
+
+Groq JSON Object Mode is used for model responses. The requested Pydantic schema is included in the system instruction, and every response is validated before entering trusted application state. JSON syntax alone is never treated as proof of schema or semantic correctness.
 
 Every stage writes a durable trace containing status, latency, model/prompt version, input/output hashes, errors and tool metadata. Model outputs are treated as untrusted until Pydantic validates them.
 
@@ -41,7 +43,7 @@ Supported deterministic tools currently include:
 - **FastAPI**: run creation, PDF ingestion, status and health endpoints
 - **PostgreSQL**: durable run state and stage traces
 - **Redis + Celery**: production job dispatch and worker isolation
-- **AgentRouter OpenAI-compatible API**: GPT-5.6 Sol retrieval reranking, extraction and judging
+- **Groq OpenAI-compatible API**: Llama retrieval reranking, extraction and judging
 - **Next.js 14**: real workbench wired to the run API
 - **Alembic**: database migrations
 - **Docker Compose**: reproducible local production topology
@@ -55,23 +57,35 @@ Supported deterministic tools currently include:
 cp .env.example .env
 ```
 
-2. Set your AgentRouter key:
+2. Configure Groq:
 
 ```bash
-AGENTROUTER_API_KEY=...
-AGENTROUTER_BASE_URL=https://co.agentrouter.org/v1
-AGENTROUTER_MODEL=gpt-5.6-sol
+LLM_PROVIDER=groq
+LLM_API_STYLE=openai_chat
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=llama-3.1-8b-instant
+LLM_API_KEY=your_groq_key
+LLM_MAX_COMPLETION_TOKENS=4096
 ```
 
-AgentRouter model availability is account/resource-pool specific. If the model page for your key shows a suffixed or alternate GPT-5.6 Sol ID, use that exact value for `AGENTROUTER_MODEL`.
+Never commit the real key. AMRRA reads it only from the runtime environment or local `.env` file.
 
-3. Start the production-shaped stack:
+3. Verify provider connectivity before starting workers:
+
+```bash
+cd back_end
+PYTHONPATH=. python -m app.providers.diagnostics
+```
+
+The diagnostic checks authentication and confirms that the configured model is visible without printing the API key.
+
+4. Start the production-shaped stack:
 
 ```bash
 docker compose up --build
 ```
 
-4. Open:
+5. Open:
 
 - Frontend: `http://localhost:3000`
 - API docs: `http://localhost:8000/docs`
@@ -84,9 +98,25 @@ cd back_end
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-export AGENTROUTER_API_KEY=...
-export AGENTROUTER_MODEL=gpt-5.6-sol
+
+export LLM_PROVIDER=groq
+export LLM_API_STYLE=openai_chat
+export LLM_BASE_URL=https://api.groq.com/openai/v1
+export LLM_MODEL=llama-3.1-8b-instant
+export LLM_API_KEY=your_groq_key
+export CELERY_BROKER_URL=redis://127.0.0.1:6379/0
+```
+
+Start FastAPI:
+
+```bash
 uvicorn main:app --reload
+```
+
+Start the Celery worker in another terminal:
+
+```bash
+celery -A worker.celery_app worker --loglevel=INFO --queues=amrra --concurrency=4
 ```
 
 The default local database is SQLite. PostgreSQL deployments use Alembic migrations and do not auto-create tables.
@@ -97,7 +127,13 @@ Run tests:
 PYTHONPATH=. pytest --cov=app --cov-report=term-missing --cov-fail-under=85 -q
 ```
 
-Run the live agent-quality suite against AgentRouter:
+Run the offline agent-quality suite:
+
+```bash
+PYTHONPATH=. python -m evals.runner
+```
+
+Run the same gold cases against the configured Groq model:
 
 ```bash
 PYTHONPATH=. python -m evals.runner --live
@@ -127,9 +163,11 @@ At least one source is required. Production returns `202 Accepted`; the client p
 - Remote source size and redirect depth are bounded.
 - PDF MIME/type, byte size and page count are bounded.
 - CORS is explicit and environment-controlled.
-- AgentRouter credentials are environment-only and are never exposed to the frontend.
+- Groq credentials are environment-only and are never exposed to the frontend.
+- Provider error messages redact the configured API key.
+- 401/403 and other permanent 4xx failures fail fast instead of burning retry budget.
 - Agent provider errors are typed run failures; the system never inserts fake hypotheses to keep the pipeline alive.
 
 ## Test strategy
 
-Tests cover schema invariants, GPT reranking constraints/fallback, planner tool-selection rules, statistical branches, hallucinated citation filtering, AgentRouter response validation, SSRF controls, persistence, failed traces, API validation and a full end-to-end agent run using a deterministic fake provider. The fake provider exists only for tests/offline evals; production has one provider: GPT-5.6 Sol through AgentRouter.
+Tests cover schema invariants, LLM reranking constraints/fallback, planner tool-selection rules, statistical branches, hallucinated citation filtering, Groq request/response validation, authentication failure semantics, model discovery, SSRF controls, persistence, failed traces, API validation and a full end-to-end agent run using a deterministic fake provider. The fake provider exists only for tests/offline evals; production has one provider: Groq.

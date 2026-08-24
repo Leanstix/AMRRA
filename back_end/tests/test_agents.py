@@ -1,7 +1,7 @@
 import pytest
 
 from app.domain.schemas import EvidenceChunk, ExperimentResult
-from app.providers.agentrouter import FakeProvider
+from app.providers.base import FakeProvider
 from app.services.agents import ExtractorAgent, JudgeAgent
 
 
