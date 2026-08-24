@@ -108,7 +108,7 @@ async def test_413_tpm_error_reduces_completion_reservation_and_retries(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_429_uses_groq_retry_after_header_before_retry(monkeypatch):
+async def test_429_uses_groq_retry_after_header_with_safety_margin(monkeypatch):
     FakeClient.responses = [
         FakeResponse(
             {"error": {"message": "rate limit exceeded"}},
@@ -130,4 +130,4 @@ async def test_429_uses_groq_retry_after_header_before_retry(monkeypatch):
 
     assert result.answer == "ok"
     assert len(FakeClient.requests) == 2
-    assert sleeps == [12.5]
+    assert sleeps == [pytest.approx(13.25)]
