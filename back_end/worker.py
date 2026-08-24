@@ -1,15 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from celery import Celery
 
 from app.core.config import get_settings
 from app.factory import build_orchestrator
+from app.providers.agentrouter import AgentRouterProvider
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 if not settings.celery_broker_url:
     raise RuntimeError("CELERY_BROKER_URL is required to start the AMRRA worker")
+
+provider_config = AgentRouterProvider(settings)
+logger.info(
+    "AgentRouter configured base=%s model=%s key_fingerprint=%s",
+    provider_config.api_base,
+    provider_config.model_name,
+    provider_config.key_fingerprint,
+)
 
 celery_app = Celery(
     "amrra",
