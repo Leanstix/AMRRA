@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from typing import Any, TypeVar
 
@@ -13,6 +14,8 @@ from app.core.config import Settings
 from app.providers.base import AgentProviderError
 
 T = TypeVar("T", bound=BaseModel)
+logger = logging.getLogger(__name__)
+
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 _SCHEMA_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
 _TPM_LIMIT_RE = re.compile(r"Limit\s+([\d,]+),\s*Requested\s+([\d,]+)", re.IGNORECASE)
@@ -21,6 +24,7 @@ _DEPRECATED_MODEL_REPLACEMENTS = {"llama-3.1-8b-instant": "openai/gpt-oss-20b"}
 _MIN_COMPLETION_TOKENS = 192
 _TPM_SAFETY_MARGIN = 384
 _MAX_RATE_LIMIT_SLEEP_SECONDS = 65.0
+_SCHEMA_HINT_MAX_CHARS = 8_000
 
 
 def _strictify_schema(value: Any) -> Any:
@@ -66,6 +70,27 @@ def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
         except ValueError:
             pass
     return float(min(2**attempt, 8))
+
+
+def _is_schema_generation_error(status: int, detail: str) -> bool:
+    """Recognize Groq's provider-side structured-generation validation failure."""
+    if status != 400:
+        return False
+    lowered = detail.lower()
+    return (
+        "does not match the expected schema" in lowered
+        or "jsonschema" in lowered
+        or "failed_generation" in lowered
+    )
+
+
+def _validation_feedback(exc: ValidationError) -> str:
+    """Return a bounded repair hint without dumping arbitrary model output."""
+    issues: list[str] = []
+    for error in exc.errors(include_input=False)[:8]:
+        location = ".".join(str(part) for part in error.get("loc", ())) or "root"
+        issues.append(f"{location}: {error.get('msg', 'invalid value')}")
+    return "; ".join(issues)[:1200]
 
 
 class GroqProvider:
@@ -119,6 +144,9 @@ class GroqProvider:
                 error = body.get("error")
                 if isinstance(error, dict):
                     detail = str(error.get("message") or error.get("detail") or "")
+                    failed_generation = error.get("failed_generation")
+                    if failed_generation and "failed_generation" not in detail.lower():
+                        detail = f"{detail} failed_generation={failed_generation}"
                 elif error:
                     detail = str(error)
                 if not detail:
@@ -166,6 +194,60 @@ class GroqProvider:
             "detail": None if model_available else f"Configured model '{self.model_name}' was not returned by /models",
         }
 
+    def _structured_payload(
+        self,
+        *,
+        system: str,
+        user: str,
+        strict_schema: dict[str, Any],
+        schema: type[BaseModel],
+        completion_cap: int,
+        json_object_fallback: bool,
+        validation_feedback: str | None,
+    ) -> dict[str, Any]:
+        system_content = (
+            f"{system}\n\n"
+            "Return only the requested structured object. Never invent evidence or values. "
+            "If evidence is insufficient, encode that honestly in the provided fields."
+        )
+        if json_object_fallback:
+            schema_hint = json.dumps(strict_schema, separators=(",", ":"), ensure_ascii=False)
+            if len(schema_hint) > _SCHEMA_HINT_MAX_CHARS:
+                schema_hint = schema_hint[:_SCHEMA_HINT_MAX_CHARS]
+            system_content += (
+                "\n\nGroq strict-schema compatibility recovery is active. Return exactly one JSON object, "
+                "with no markdown or commentary. Match the requested schema as closely as possible; fields with "
+                "application defaults may be omitted, but all semantic required fields and enum values must be valid. "
+                f"Schema contract: {schema_hint}"
+            )
+            if validation_feedback:
+                system_content += f"\nPrevious local validation issues to repair: {validation_feedback}"
+
+        response_format: dict[str, Any]
+        if json_object_fallback:
+            response_format = {"type": "json_object"}
+        else:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": _schema_name(schema),
+                    "strict": True,
+                    "schema": strict_schema,
+                },
+            }
+
+        return {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user},
+            ],
+            "response_format": response_format,
+            "temperature": 0,
+            "reasoning_effort": self.reasoning_effort,
+            "max_completion_tokens": completion_cap,
+        }
+
     async def structured(
         self,
         *,
@@ -176,49 +258,91 @@ class GroqProvider:
     ) -> T:
         strict_schema = _strictify_schema(schema.model_json_schema())
         completion_cap = max(_MIN_COMPLETION_TOKENS, int(max_completion_tokens or self.max_completion_tokens))
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": f"{system}\n\nReturn only the requested structured object. Never invent evidence or values. If evidence is insufficient, encode that honestly in the provided fields."},
-                {"role": "user", "content": user},
-            ],
-            "response_format": {"type": "json_schema", "json_schema": {"name": _schema_name(schema), "strict": True, "schema": strict_schema}},
-            "temperature": 0,
-            "reasoning_effort": self.reasoning_effort,
-            "max_completion_tokens": completion_cap,
-        }
-
+        retries_remaining = self.max_retries
+        retry_attempt = 0
+        json_object_fallback = False
+        validation_feedback: str | None = None
         last_error: Exception | None = None
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            for attempt in range(self.max_retries + 1):
+            while True:
                 retry_delay: float | None = None
+                payload = self._structured_payload(
+                    system=system,
+                    user=user,
+                    strict_schema=strict_schema,
+                    schema=schema,
+                    completion_cap=completion_cap,
+                    json_object_fallback=json_object_fallback,
+                    validation_feedback=validation_feedback,
+                )
                 try:
-                    response = await client.post(f"{self.api_base}/chat/completions", headers=self.headers, json=payload)
+                    response = await client.post(
+                        f"{self.api_base}/chat/completions",
+                        headers=self.headers,
+                        json=payload,
+                    )
                     response.raise_for_status()
                     content = _JSON_FENCE_RE.sub("", self._content_text(response.json()).strip()).strip()
-                    return schema.model_validate_json(content)
+                    try:
+                        return schema.model_validate_json(content)
+                    except ValidationError as exc:
+                        validation_feedback = _validation_feedback(exc)
+                        last_error = AgentProviderError(
+                            f"Groq returned JSON that failed local schema validation: {validation_feedback}"
+                        )
+                        if not json_object_fallback:
+                            json_object_fallback = True
+                            logger.warning(
+                                "Groq strict output passed HTTP validation but failed local Pydantic validation; "
+                                "switching to JSON Object compatibility recovery for schema=%s",
+                                schema.__name__,
+                            )
+                            continue
+                        if retries_remaining <= 0:
+                            break
+                        retries_remaining -= 1
+                        retry_attempt += 1
                 except httpx.HTTPStatusError as exc:
                     status = exc.response.status_code
                     detail = self._safe_error_detail(exc.response)
                     suffix = f": {detail}" if detail else ""
                     last_error = AgentProviderError(f"Groq returned HTTP {status}{suffix}")
 
-                    if status == 413 and attempt < self.max_retries:
-                        reduced_cap = _reduced_completion_cap(detail, int(payload["max_completion_tokens"]))
+                    if _is_schema_generation_error(status, detail) and not json_object_fallback:
+                        json_object_fallback = True
+                        logger.warning(
+                            "Groq strict structured generation failed; switching to JSON Object compatibility "
+                            "recovery for schema=%s",
+                            schema.__name__,
+                        )
+                        continue
+
+                    if status == 413:
+                        reduced_cap = _reduced_completion_cap(detail, completion_cap)
                         if reduced_cap is not None:
-                            payload["max_completion_tokens"] = reduced_cap
+                            completion_cap = reduced_cap
                             await asyncio.sleep(0.25)
                             continue
 
                     retryable = status in _RETRYABLE_HTTP_STATUS or status >= 500
                     if not retryable:
                         raise last_error from exc
+                    if retries_remaining <= 0:
+                        break
+                    retries_remaining -= 1
                     if status == 429:
-                        retry_delay = _retry_after_seconds(exc.response, attempt)
-                except (httpx.HTTPError, json.JSONDecodeError, ValidationError, AgentProviderError) as exc:
+                        retry_delay = _retry_after_seconds(exc.response, retry_attempt)
+                    retry_attempt += 1
+                except (httpx.HTTPError, json.JSONDecodeError, AgentProviderError) as exc:
                     last_error = exc
+                    if retries_remaining <= 0:
+                        break
+                    retries_remaining -= 1
+                    retry_attempt += 1
 
-                if attempt < self.max_retries:
-                    await asyncio.sleep(retry_delay if retry_delay is not None else min(2**attempt, 4))
+                await asyncio.sleep(
+                    retry_delay if retry_delay is not None else min(2 ** max(0, retry_attempt - 1), 4)
+                )
 
         raise AgentProviderError(f"structured generation failed after retries: {last_error}")
