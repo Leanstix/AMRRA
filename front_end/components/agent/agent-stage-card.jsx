@@ -317,10 +317,13 @@ function EmptyStage({ text }) {
 }
 
 export function AgentStageCard({ item, run, open, onOpenChange, index }) {
+  if (!item?.stage || !STAGE_META[item.stage]) return null
+
   const meta = STAGE_META[item.stage]
   const statusMeta = STATUS_META[item.status] || STATUS_META.pending
   const Icon = meta.icon
   const trace = item.trace
+  const animationIndex = Number.isFinite(index) ? index : 0
 
   return (
     <Collapsible open={open} onOpenChange={onOpenChange}>
@@ -332,7 +335,7 @@ export function AgentStageCard({ item, run, open, onOpenChange, index }) {
               ? "border-destructive/30"
               : "hover:border-primary/18 hover:shadow-sm"
         }`}
-        style={{ animationDelay: `${index * 45}ms` }}
+        style={{ animationDelay: `${animationIndex * 45}ms` }}
       >
         {item.status === "active" && <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-primary to-transparent" />}
         <CollapsibleTrigger asChild>
