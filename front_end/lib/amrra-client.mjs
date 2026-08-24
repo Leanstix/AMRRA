@@ -1,5 +1,7 @@
 export const API_BASE = (process.env.NEXT_PUBLIC_AMRRA_API_URL || "http://localhost:8000/api/v1").replace(/\/$/, "")
 
+export const STAGE_ORDER = ["ingestion", "retrieval", "extraction", "planning", "experimentation", "judging"]
+
 export async function createRun({ query, url, text, file, topK = 8 }) {
   const form = new FormData()
   form.append("query", query)
@@ -32,11 +34,27 @@ export async function toApiError(response) {
 }
 
 export function stageProgress(run) {
-  const stages = ["ingestion", "retrieval", "extraction", "planning", "experimentation", "judging"]
-  const completed = new Set(
-    (run?.traces || [])
-      .filter((trace) => trace.status === "completed")
-      .map((trace) => trace.stage),
-  )
-  return stages.map((stage) => ({ stage, completed: completed.has(stage) }))
+  const traceByStage = new Map()
+  for (const trace of run?.traces || []) {
+    traceByStage.set(trace.stage, trace)
+  }
+
+  const result = STAGE_ORDER.map((stage) => {
+    const trace = traceByStage.get(stage) || null
+    const completed = trace?.status === "completed"
+    const failed = trace?.status === "failed"
+    return {
+      stage,
+      completed,
+      trace,
+      status: failed ? "failed" : completed ? "completed" : "pending",
+    }
+  })
+
+  if (run?.status === "running") {
+    const active = result.find((item) => item.status === "pending")
+    if (active) active.status = "active"
+  }
+
+  return result
 }
