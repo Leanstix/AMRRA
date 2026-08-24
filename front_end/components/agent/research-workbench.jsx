@@ -56,9 +56,7 @@ function ProcessingView({ run, progress, openStages, setStageOpen }) {
             {progress.map((item, index) => (
               <AgentStageCard
                 key={item.stage}
-                stage={item.stage}
-                status={item.status}
-                trace={item.trace}
+                item={item}
                 run={run}
                 index={index}
                 open={openStages.has(item.stage)}
@@ -94,9 +92,7 @@ function FailedRun({ run, progress, openStages, setStageOpen }) {
             {progress.map((item, index) => (
               <AgentStageCard
                 key={item.stage}
-                stage={item.stage}
-                status={item.status}
-                trace={item.trace}
+                item={item}
                 run={run}
                 index={index}
                 open={openStages.has(item.stage)}
@@ -141,8 +137,6 @@ export function ResearchWorkbench() {
 
   useEffect(() => {
     if (run?.status === "completed") {
-      // Once all stages are complete the implementation trace disappears.
-      // The conversation becomes result-first instead of exposing process noise.
       setOpenStages(new Set())
     }
   }, [run?.status])
