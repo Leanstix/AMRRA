@@ -16,7 +16,14 @@ class AgentProvider(Protocol):
     provider_name: str
     rerank_enabled: bool
 
-    async def structured(self, *, system: str, user: str, schema: type[T]) -> T: ...
+    async def structured(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[T],
+        max_completion_tokens: int | None = None,
+    ) -> T: ...
 
 
 class FakeProvider:
@@ -34,7 +41,14 @@ class FakeProvider:
         self.responses = list(structured_responses or [])
         self.rerank_enabled = rerank_enabled
 
-    async def structured(self, *, system: str, user: str, schema: type[T]) -> T:
+    async def structured(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[T],
+        max_completion_tokens: int | None = None,
+    ) -> T:
         if not self.responses:
             raise AgentProviderError("no fake provider response configured")
         value = self.responses.pop(0)
