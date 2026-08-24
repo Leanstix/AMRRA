@@ -13,7 +13,7 @@ router = APIRouter(tags=["health"])
 def health() -> HealthResponse:
     settings = get_settings()
     database_ok = get_repository().ping()
-    provider_ok = bool(settings.cohere_api_key)
+    provider_ok = bool(settings.agentrouter_api_key)
     return HealthResponse(
         status="ok" if database_ok and provider_ok else "degraded",
         database=database_ok,

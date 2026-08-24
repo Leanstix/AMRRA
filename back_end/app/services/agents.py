@@ -14,7 +14,7 @@ from app.domain.schemas import (
     JudgeReport,
     Observation,
 )
-from app.providers.cohere import AgentProvider
+from app.providers.agentrouter import AgentProvider
 
 
 class _ObservationPayload(BaseModel):
@@ -55,8 +55,8 @@ class _JudgePayload(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
 
 
-EXTRACTOR_PROMPT_VERSION = "extractor-v2.1"
-JUDGE_PROMPT_VERSION = "judge-v2.1"
+EXTRACTOR_PROMPT_VERSION = "extractor-v2.2-gpt56"
+JUDGE_PROMPT_VERSION = "judge-v2.2-gpt56"
 
 
 class ExtractorAgent:
@@ -74,7 +74,7 @@ class ExtractorAgent:
             "explicitly supported by supplied evidence. Never manufacture groups, raw observations, sample sizes, "
             "or statistical results. Every hypothesis and observation must cite one or more supplied chunk_id values. "
             "If the evidence is not sufficient for a statistical experiment, preserve the hypothesis but leave "
-            "unsupported numeric fields empty and explain the limitation in notes. Generate JSON only."
+            "unsupported numeric fields empty and explain the limitation in notes."
         )
         user = f"Research question: {query}\nEvidence:\n{json.dumps(evidence_payload, ensure_ascii=False)}"
         payload = await self.provider.structured(system=system, user=user, schema=_ExtractionPayload)
@@ -126,7 +126,7 @@ class JudgeAgent:
             "You are AMRRA's judging agent. Synthesize deterministic experiment results without changing their "
             "numbers. Distinguish statistical significance from practical importance, identify limitations, and "
             "cite only supplied evidence chunk IDs. If experiments are insufficient, say so explicitly. Never "
-            "invent citations or results. Generate JSON only."
+            "invent citations or results."
         )
         user = json.dumps(
             {
