@@ -17,7 +17,7 @@ async def diagnose() -> dict:
             "configured": False,
             "provider": settings.llm_provider,
             "api_style": settings.llm_api_style,
-            "model": settings.llm_model,
+            "requested_model": settings.llm_model,
             "base_url": settings.llm_base_url,
             "error": str(exc),
         }
@@ -27,7 +27,9 @@ async def diagnose() -> dict:
         "configured": True,
         "provider": provider.provider_name,
         "api_style": settings.llm_api_style,
+        "requested_model": provider.requested_model_name,
         "model": provider.model_name,
+        "model_migrated_from": provider.model_migrated_from,
         "base_url": provider.api_base,
         "key_fingerprint": provider.key_fingerprint,
         **result,
