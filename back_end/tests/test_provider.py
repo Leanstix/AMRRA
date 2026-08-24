@@ -263,11 +263,20 @@ async def _noop():
 
 
 @pytest.mark.asyncio
-async def test_provider_rejects_unstructured_response(monkeypatch):
-    FakeClient.responses = [FakeResponse({"choices": [{"message": {"content": "not-json"}}]})]
+async def test_provider_rejects_unstructured_response_after_compatibility_fallback(monkeypatch):
+    FakeClient.responses = [
+        FakeResponse({"choices": [{"message": {"content": "not-json"}}]}),
+        FakeResponse({"choices": [{"message": {"content": "still-not-json"}}]}),
+    ]
+    FakeClient.requests = []
     monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
-    with pytest.raises(AgentProviderError):
-        await provider().structured(system="system", user="json", schema=Payload)
+
+    with pytest.raises(AgentProviderError, match="structured generation failed"):
+        await provider(retries=0).structured(system="system", user="json", schema=Payload)
+
+    assert len(FakeClient.requests) == 2
+    assert FakeClient.requests[0][3]["response_format"]["type"] == "json_schema"
+    assert FakeClient.requests[1][3]["response_format"] == {"type": "json_object"}
 
 
 def test_provider_requires_llm_key():
