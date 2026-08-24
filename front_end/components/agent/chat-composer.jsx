@@ -66,7 +66,7 @@ export function ChatComposer({
   }
 
   return (
-    <div className={`composer-shell ${compact ? "composer-shell-compact" : ""}`}>
+    <div className={`overflow-hidden rounded-[1.7rem] border border-border/90 bg-card/95 shadow-[0_1px_2px_rgba(0,0,0,0.05),0_16px_45px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-shadow focus-within:border-primary/25 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.05),0_20px_55px_rgba(15,23,42,0.10)] dark:shadow-black/20 ${compact ? "rounded-[1.55rem]" : ""}`}>
       {(file || urls.length > 0) && (
         <div className="flex flex-wrap gap-2 px-3.5 pt-3.5">
           {file && (
