@@ -55,8 +55,8 @@ class _JudgePayload(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
 
 
-EXTRACTOR_PROMPT_VERSION = "extractor-v2.3-groq-llama31"
-JUDGE_PROMPT_VERSION = "judge-v2.3-groq-llama31"
+EXTRACTOR_PROMPT_VERSION = "extractor-v2.4-groq-gptoss20b"
+JUDGE_PROMPT_VERSION = "judge-v2.4-groq-gptoss20b"
 
 
 class ExtractorAgent:

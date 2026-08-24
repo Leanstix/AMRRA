@@ -10,7 +10,9 @@ class FakeProvider:
     provider_name = "groq"
 
     def __init__(self, settings):
+        self.requested_model_name = settings.llm_model
         self.model_name = settings.llm_model
+        self.model_migrated_from = None
         self.api_base = settings.llm_base_url.rstrip("/")
         self.key_fingerprint = "abc123def456"
 
@@ -37,6 +39,9 @@ async def test_diagnose_returns_safe_provider_state(monkeypatch):
 
     assert result["provider"] == "groq"
     assert result["api_style"] == "openai_chat"
+    assert result["requested_model"] == "openai/gpt-oss-20b"
+    assert result["model"] == "openai/gpt-oss-20b"
+    assert result["model_migrated_from"] is None
     assert result["authenticated"] is True
     assert result["model_available"] is True
     assert result["key_fingerprint"] == "abc123def456"
@@ -55,4 +60,5 @@ async def test_diagnose_reports_missing_configuration(monkeypatch):
 
     assert result["configured"] is False
     assert result["provider"] == "groq"
+    assert result["requested_model"] == "openai/gpt-oss-20b"
     assert "LLM_API_KEY" in result["error"]

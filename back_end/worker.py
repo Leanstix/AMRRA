@@ -15,6 +15,12 @@ if not settings.celery_broker_url:
     raise RuntimeError("CELERY_BROKER_URL is required to start the AMRRA worker")
 
 provider_config = GroqProvider(settings)
+if provider_config.model_migrated_from:
+    logger.warning(
+        "Groq model %s is retired for developer/free tiers; AMRRA migrated it to %s",
+        provider_config.model_migrated_from,
+        provider_config.model_name,
+    )
 logger.info(
     "LLM configured provider=%s base=%s model=%s key_fingerprint=%s",
     provider_config.provider_name,

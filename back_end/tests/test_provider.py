@@ -7,11 +7,17 @@ from pydantic import BaseModel
 import app.providers.groq as groq_module
 from app.core.config import Settings
 from app.providers.base import AgentProviderError
-from app.providers.groq import GroqProvider
+from app.providers.groq import GroqProvider, _strictify_schema
+
+
+class NestedPayload(BaseModel):
+    label: str
+    note: str | None = None
 
 
 class Payload(BaseModel):
     answer: str
+    nested: NestedPayload | None = None
 
 
 class FakeResponse:
@@ -52,23 +58,36 @@ class FakeClient:
         return self.__class__.responses.pop(0)
 
 
-def provider(*, key="secret", retries=0, provider_name="groq", api_style="openai_chat"):
+def provider(
+    *,
+    key="secret",
+    retries=0,
+    provider_name="groq",
+    api_style="openai_chat",
+    model="openai/gpt-oss-20b",
+):
     return GroqProvider(
         Settings(
             environment="test",
             LLM_PROVIDER=provider_name,
             LLM_API_STYLE=api_style,
             LLM_API_KEY=key,
-            LLM_MODEL="llama-3.1-8b-instant",
+            LLM_MODEL=model,
             agent_max_retries=retries,
         )
     )
 
 
 @pytest.mark.asyncio
-async def test_structured_provider_uses_groq_openai_compatible_api(monkeypatch):
+async def test_structured_provider_uses_groq_strict_json_schema(monkeypatch):
     FakeClient.responses = [
-        FakeResponse({"choices": [{"message": {"content": '{"answer":"ok"}'}}]})
+        FakeResponse(
+            {
+                "choices": [
+                    {"message": {"content": '{"answer":"ok","nested":null}'}}
+                ]
+            }
+        )
     ]
     FakeClient.requests = []
     monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
@@ -81,10 +100,29 @@ async def test_structured_provider_uses_groq_openai_compatible_api(monkeypatch):
     assert client.headers["Authorization"] == "Bearer secret"
     _, url, _, payload = FakeClient.requests[0]
     assert url == "https://api.groq.com/openai/v1/chat/completions"
-    assert payload["model"] == "llama-3.1-8b-instant"
-    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["model"] == "openai/gpt-oss-20b"
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["strict"] is True
+    strict_schema = payload["response_format"]["json_schema"]["schema"]
+    assert strict_schema["required"] == ["answer", "nested"]
+    assert strict_schema["additionalProperties"] is False
     assert payload["temperature"] == 0
     assert payload["max_completion_tokens"] == 4096
+
+
+def test_strict_schema_closes_nested_objects_and_requires_optional_fields():
+    schema = _strictify_schema(Payload.model_json_schema())
+    nested_schema = schema["$defs"]["NestedPayload"]
+    assert nested_schema["required"] == ["label", "note"]
+    assert nested_schema["additionalProperties"] is False
+    assert "default" not in nested_schema["properties"]["note"]
+
+
+def test_deprecated_llama_model_is_migrated_to_official_replacement():
+    client = provider(model="llama-3.1-8b-instant")
+    assert client.requested_model_name == "llama-3.1-8b-instant"
+    assert client.model_name == "openai/gpt-oss-20b"
+    assert client.model_migrated_from == "llama-3.1-8b-instant"
 
 
 @pytest.mark.asyncio
@@ -93,7 +131,13 @@ async def test_provider_accepts_json_fences_and_content_blocks(monkeypatch):
         FakeResponse(
             {
                 "choices": [
-                    {"message": {"content": [{"text": '```json\n{"answer":"ok"}\n```'}]}}
+                    {
+                        "message": {
+                            "content": [
+                                {"text": '```json\n{"answer":"ok","nested":null}\n```'}
+                            ]
+                        }
+                    }
                 ]
             }
         )
@@ -107,7 +151,13 @@ async def test_provider_accepts_json_fences_and_content_blocks(monkeypatch):
 async def test_schema_validation_failure_is_retried(monkeypatch):
     FakeClient.responses = [
         FakeResponse({"choices": [{"message": {"content": '{"wrong":"shape"}'}}]}),
-        FakeResponse({"choices": [{"message": {"content": '{"answer":"fixed"}'}}]}),
+        FakeResponse(
+            {
+                "choices": [
+                    {"message": {"content": '{"answer":"fixed","nested":null}'}}
+                ]
+            }
+        ),
     ]
     FakeClient.requests = []
     monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
@@ -169,9 +219,26 @@ async def test_401_fails_immediately_without_retrying_and_redacts_key(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_connection_check_confirms_auth_and_model(monkeypatch):
+async def test_404_model_error_fails_immediately_without_retrying(monkeypatch):
     FakeClient.responses = [
-        FakeResponse({"object": "list", "data": [{"id": "llama-3.1-8b-instant"}]})
+        FakeResponse(
+            {"error": {"message": "The model does not exist or you do not have access."}},
+            status_code=404,
+        )
+    ]
+    FakeClient.requests = []
+    monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(AgentProviderError, match="HTTP 404"):
+        await provider(retries=3).structured(system="system", user="json", schema=Payload)
+
+    assert len(FakeClient.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_connection_check_confirms_auth_and_effective_model(monkeypatch):
+    FakeClient.responses = [
+        FakeResponse({"object": "list", "data": [{"id": "openai/gpt-oss-20b"}]})
     ]
     FakeClient.requests = []
     monkeypatch.setattr(groq_module.httpx, "AsyncClient", FakeClient)
@@ -197,7 +264,7 @@ async def test_connection_check_reports_missing_model(monkeypatch):
 
     assert result["authenticated"] is True
     assert result["model_available"] is False
-    assert "llama-3.1-8b-instant" in result["detail"]
+    assert "openai/gpt-oss-20b" in result["detail"]
 
 
 @pytest.mark.asyncio
