@@ -5,7 +5,7 @@ import pytest
 from app.core.config import Settings
 from app.domain.schemas import RunRequest, RunStatus, SourceInput
 from app.infrastructure.repository import RunRepository
-from app.providers.agentrouter import FakeProvider
+from app.providers.base import FakeProvider
 from app.services.ingestion import SourceIngestor
 from app.services.orchestrator import AgentOrchestrator
 
@@ -37,7 +37,7 @@ async def test_full_agent_workflow_persists_traceable_results(tmp_path: Path):
     settings = Settings(
         environment="test",
         database_url=f"sqlite:///{tmp_path / 'run.db'}",
-        AGENTROUTER_API_KEY="test",
+        LLM_API_KEY="test",
     )
     repo = RunRepository(settings.database_url)
     request = RunRequest(
@@ -83,7 +83,7 @@ async def test_agent_failure_marks_run_failed_and_keeps_failed_trace(tmp_path: P
     settings = Settings(
         environment="test",
         database_url=f"sqlite:///{tmp_path / 'fail.db'}",
-        AGENTROUTER_API_KEY="test",
+        LLM_API_KEY="test",
     )
     repo = RunRepository(settings.database_url)
     request = RunRequest(
