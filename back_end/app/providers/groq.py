@@ -19,11 +19,21 @@ logger = logging.getLogger(__name__)
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 _SCHEMA_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
 _TPM_LIMIT_RE = re.compile(r"Limit\s+([\d,]+),\s*Requested\s+([\d,]+)", re.IGNORECASE)
-_RETRYABLE_HTTP_STATUS = {408, 409, 425, 429}
+_RETRY_IN_RE = re.compile(
+    r"try\s+again\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|milliseconds?|s|sec(?:ond)?s?|m|min(?:ute)?s?)?",
+    re.IGNORECASE,
+)
+_DURATION_RE = re.compile(
+    r"^\s*(?:(?P<minutes>[0-9]+(?:\.[0-9]+)?)m)?\s*(?:(?P<seconds>[0-9]+(?:\.[0-9]+)?)s)?\s*$",
+    re.IGNORECASE,
+)
+_RETRYABLE_HTTP_STATUS = {408, 409, 425}
 _DEPRECATED_MODEL_REPLACEMENTS = {"llama-3.1-8b-instant": "openai/gpt-oss-20b"}
 _MIN_COMPLETION_TOKENS = 192
 _TPM_SAFETY_MARGIN = 384
 _MAX_RATE_LIMIT_SLEEP_SECONDS = 65.0
+_MAX_RATE_LIMIT_RETRIES = 6
+_RATE_LIMIT_SAFETY_SECONDS = 0.75
 _SCHEMA_HINT_MAX_CHARS = 8_000
 
 
@@ -61,14 +71,57 @@ def _reduced_completion_cap(detail: str, current_cap: int) -> int | None:
     return target if target < current_cap else None
 
 
-def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
-    """Prefer Groq's rate-limit reset hint over blind exponential retries."""
-    raw = response.headers.get("retry-after")
-    if raw:
+def _duration_seconds(raw: str | None) -> float | None:
+    """Parse Groq reset durations such as `24.2s`, `1m2.4s`, or plain seconds."""
+    if not raw:
+        return None
+    value = raw.strip().lower()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    if value.endswith("ms"):
         try:
-            return min(_MAX_RATE_LIMIT_SLEEP_SECONDS, max(0.25, float(raw)))
+            return max(0.0, float(value[:-2].strip()) / 1000.0)
         except ValueError:
-            pass
+            return None
+    match = _DURATION_RE.match(value)
+    if not match or not any(match.groupdict().values()):
+        return None
+    minutes = float(match.group("minutes") or 0.0)
+    seconds = float(match.group("seconds") or 0.0)
+    return max(0.0, minutes * 60.0 + seconds)
+
+
+def _body_retry_seconds(detail: str) -> float | None:
+    match = _RETRY_IN_RE.search(detail or "")
+    if not match:
+        return None
+    amount = float(match.group(1))
+    unit = (match.group(2) or "s").lower()
+    if unit.startswith("ms") or unit.startswith("millisecond"):
+        return amount / 1000.0
+    if unit.startswith("m") and not unit.startswith("ms"):
+        return amount * 60.0
+    return amount
+
+
+def _retry_after_seconds(response: httpx.Response, detail: str, attempt: int) -> float:
+    """Use every Groq reset hint and wait for the safest advertised token window."""
+    hints: list[float] = []
+    retry_after = _duration_seconds(response.headers.get("retry-after"))
+    if retry_after is not None:
+        hints.append(retry_after)
+    token_reset = _duration_seconds(response.headers.get("x-ratelimit-reset-tokens"))
+    if token_reset is not None:
+        hints.append(token_reset)
+    body_retry = _body_retry_seconds(detail)
+    if body_retry is not None:
+        hints.append(body_retry)
+
+    if hints:
+        wait = max(hints) + _RATE_LIMIT_SAFETY_SECONDS
+        return min(_MAX_RATE_LIMIT_SLEEP_SECONDS, max(0.25, wait))
     return float(min(2**attempt, 8))
 
 
@@ -258,8 +311,10 @@ class GroqProvider:
     ) -> T:
         strict_schema = _strictify_schema(schema.model_json_schema())
         completion_cap = max(_MIN_COMPLETION_TOKENS, int(max_completion_tokens or self.max_completion_tokens))
-        retries_remaining = self.max_retries
-        retry_attempt = 0
+        generation_retries_remaining = self.max_retries
+        generation_retry_attempt = 0
+        rate_limit_retries_remaining = _MAX_RATE_LIMIT_RETRIES
+        rate_limit_attempt = 0
         json_object_fallback = False
         validation_feedback: str | None = None
         last_error: Exception | None = None
@@ -299,10 +354,10 @@ class GroqProvider:
                                 schema.__name__,
                             )
                             continue
-                        if retries_remaining <= 0:
+                        if generation_retries_remaining <= 0:
                             break
-                        retries_remaining -= 1
-                        retry_attempt += 1
+                        generation_retries_remaining -= 1
+                        generation_retry_attempt += 1
                 except httpx.HTTPStatusError as exc:
                     status = exc.response.status_code
                     detail = self._safe_error_detail(exc.response)
@@ -325,24 +380,41 @@ class GroqProvider:
                             await asyncio.sleep(0.25)
                             continue
 
+                    if status == 429:
+                        if rate_limit_retries_remaining <= 0:
+                            raise last_error from exc
+                        rate_limit_retries_remaining -= 1
+                        retry_delay = _retry_after_seconds(exc.response, detail, rate_limit_attempt)
+                        rate_limit_attempt += 1
+                        logger.warning(
+                            "Groq rate limit reached for schema=%s; waiting %.2fs before retry (%d/%d). "
+                            "This wait does not consume the structured-generation retry budget.",
+                            schema.__name__,
+                            retry_delay,
+                            rate_limit_attempt,
+                            _MAX_RATE_LIMIT_RETRIES,
+                        )
+                        await asyncio.sleep(retry_delay)
+                        continue
+
                     retryable = status in _RETRYABLE_HTTP_STATUS or status >= 500
                     if not retryable:
                         raise last_error from exc
-                    if retries_remaining <= 0:
+                    if generation_retries_remaining <= 0:
                         break
-                    retries_remaining -= 1
-                    if status == 429:
-                        retry_delay = _retry_after_seconds(exc.response, retry_attempt)
-                    retry_attempt += 1
+                    generation_retries_remaining -= 1
+                    generation_retry_attempt += 1
                 except (httpx.HTTPError, json.JSONDecodeError, AgentProviderError) as exc:
                     last_error = exc
-                    if retries_remaining <= 0:
+                    if generation_retries_remaining <= 0:
                         break
-                    retries_remaining -= 1
-                    retry_attempt += 1
+                    generation_retries_remaining -= 1
+                    generation_retry_attempt += 1
 
                 await asyncio.sleep(
-                    retry_delay if retry_delay is not None else min(2 ** max(0, retry_attempt - 1), 4)
+                    retry_delay
+                    if retry_delay is not None
+                    else min(2 ** max(0, generation_retry_attempt - 1), 4)
                 )
 
         raise AgentProviderError(f"structured generation failed after retries: {last_error}")
