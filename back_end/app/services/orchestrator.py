@@ -4,7 +4,7 @@ import asyncio
 
 from app.domain.schemas import RunRequest, RunStatus, StageName
 from app.infrastructure.repository import RunRepository
-from app.providers.agentrouter import AgentProvider
+from app.providers.base import AgentProvider
 from app.services.agents import EXTRACTOR_PROMPT_VERSION, JUDGE_PROMPT_VERSION, ExtractorAgent, JudgeAgent
 from app.services.ingestion import SourceIngestor
 from app.services.observability import TraceManager
@@ -63,6 +63,7 @@ class AgentOrchestrator:
                 self.repository.patch_state(run_id, evidence=[item.model_dump(mode="json") for item in evidence])
                 retrieval_trace["output"] = [item.model_dump(mode="json") for item in evidence]
                 retrieval_trace["metadata"] = {
+                    "provider": self.provider.provider_name,
                     "chunks": len(evidence),
                     "reranked": sum("agent_relevance" in item.metadata for item in evidence),
                 }
@@ -79,6 +80,7 @@ class AgentOrchestrator:
                     raise PipelineError("NO_SUPPORTED_HYPOTHESIS", "The agent found no evidence-backed hypothesis")
                 self.repository.patch_state(run_id, extraction=extraction.model_dump(mode="json"))
                 extraction_trace["output"] = extraction.model_dump(mode="json")
+                extraction_trace["metadata"] = {"provider": self.provider.provider_name}
 
             with self.traces.stage(
                 run_id,
@@ -118,6 +120,7 @@ class AgentOrchestrator:
                 report = await self.judge.run(request.query, evidence, experiments)
                 self.repository.patch_state(run_id, report=report.model_dump(mode="json"))
                 judge_trace["output"] = report.model_dump(mode="json")
+                judge_trace["metadata"] = {"provider": self.provider.provider_name}
 
             self.repository.set_status(run_id, RunStatus.COMPLETED)
         except Exception as exc:
