@@ -15,6 +15,12 @@ from app.domain.schemas import (
     Observation,
 )
 from app.providers.base import AgentProvider
+from app.services.prompt_budget import compact_experiment, pack_evidence
+
+_EXTRACTOR_EVIDENCE_CHAR_BUDGET = 10_000
+_EXTRACTOR_CHUNK_CHAR_BUDGET = 1_200
+_JUDGE_EVIDENCE_CHAR_BUDGET = 4_500
+_JUDGE_CHUNK_CHAR_BUDGET = 650
 
 
 class _ObservationPayload(BaseModel):
@@ -55,8 +61,8 @@ class _JudgePayload(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
 
 
-EXTRACTOR_PROMPT_VERSION = "extractor-v2.4-groq-gptoss20b"
-JUDGE_PROMPT_VERSION = "judge-v2.4-groq-gptoss20b"
+EXTRACTOR_PROMPT_VERSION = "extractor-v2.5-groq-budgeted"
+JUDGE_PROMPT_VERSION = "judge-v2.5-groq-budgeted"
 
 
 class ExtractorAgent:
@@ -64,20 +70,34 @@ class ExtractorAgent:
         self.provider = provider
 
     async def run(self, query: str, evidence: list[EvidenceChunk]) -> ExtractionResult:
-        allowed_ids = {chunk.chunk_id for chunk in evidence}
-        evidence_payload = [
-            {"chunk_id": chunk.chunk_id, "title": chunk.source_title, "text": chunk.text}
-            for chunk in evidence
-        ]
+        evidence_payload, budget = pack_evidence(
+            evidence,
+            total_chars=_EXTRACTOR_EVIDENCE_CHAR_BUDGET,
+            per_chunk_chars=_EXTRACTOR_CHUNK_CHAR_BUDGET,
+        )
+        allowed_ids = {item["chunk_id"] for item in evidence_payload}
         system = (
             "You are AMRRA's evidence extraction agent. Extract only claims and numerical observations that are "
             "explicitly supported by supplied evidence. Never manufacture groups, raw observations, sample sizes, "
             "or statistical results. Every hypothesis and observation must cite one or more supplied chunk_id values. "
             "If the evidence is not sufficient for a statistical experiment, preserve the hypothesis but leave "
-            "unsupported numeric fields empty and explain the limitation in notes."
+            "unsupported numeric fields empty and explain the limitation in notes. Keep the response concise."
         )
-        user = f"Research question: {query}\nEvidence:\n{json.dumps(evidence_payload, ensure_ascii=False)}"
-        payload = await self.provider.structured(system=system, user=user, schema=_ExtractionPayload)
+        user = json.dumps(
+            {
+                "research_question": query,
+                "evidence": evidence_payload,
+                "prompt_budget": budget,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        payload = await self.provider.structured(
+            system=system,
+            user=user,
+            schema=_ExtractionPayload,
+            max_completion_tokens=getattr(self.provider, "extractor_max_completion_tokens", 1400),
+        )
 
         hypotheses: list[Hypothesis] = []
         for item in payload.hypotheses:
@@ -108,7 +128,13 @@ class ExtractorAgent:
                 )
             )
 
-        return ExtractionResult(hypotheses=hypotheses, notes=payload.notes)
+        notes = payload.notes
+        if budget["chunks_packed"] < len(evidence):
+            notes = (
+                f"{notes} Evidence context was budgeted to {budget['chunks_packed']} of {len(evidence)} "
+                "ranked chunks for this extraction pass."
+            ).strip()
+        return ExtractionResult(hypotheses=hypotheses, notes=notes)
 
 
 class JudgeAgent:
@@ -121,22 +147,46 @@ class JudgeAgent:
         evidence: list[EvidenceChunk],
         experiments: list[ExperimentResult],
     ) -> JudgeReport:
-        allowed_ids = {chunk.chunk_id for chunk in evidence}
+        referenced_ids = {
+            chunk_id
+            for experiment in experiments
+            for chunk_id in experiment.evidence_chunk_ids
+        }
+        relevant_evidence = [chunk for chunk in evidence if chunk.chunk_id in referenced_ids]
+        if not relevant_evidence:
+            relevant_evidence = evidence[:4]
+
+        evidence_payload, budget = pack_evidence(
+            relevant_evidence,
+            total_chars=_JUDGE_EVIDENCE_CHAR_BUDGET,
+            per_chunk_chars=_JUDGE_CHUNK_CHAR_BUDGET,
+        )
+        allowed_ids = {item["chunk_id"] for item in evidence_payload}
+        experiment_payload = [compact_experiment(result) for result in experiments]
+
         system = (
-            "You are AMRRA's judging agent. Synthesize deterministic experiment results without changing their "
-            "numbers. Distinguish statistical significance from practical importance, identify limitations, and "
-            "cite only supplied evidence chunk IDs. If experiments are insufficient, say so explicitly. Never "
-            "invent citations or results."
+            "You are AMRRA's judging agent. Synthesize immutable deterministic experiment results without changing "
+            "their numbers. Distinguish statistical significance from practical importance, identify limitations, "
+            "and cite only supplied evidence chunk IDs. If experiments are insufficient, say so explicitly. Never "
+            "invent citations or results. Prefer a concise research assessment over repeating evidence verbatim."
         )
         user = json.dumps(
             {
                 "research_question": query,
-                "evidence": [chunk.model_dump() for chunk in evidence],
-                "experiments": [result.model_dump() for result in experiments],
+                "evidence": evidence_payload,
+                "experiments": experiment_payload,
+                "prompt_budget": budget,
             },
             default=str,
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
-        payload = await self.provider.structured(system=system, user=user, schema=_JudgePayload)
+        payload = await self.provider.structured(
+            system=system,
+            user=user,
+            schema=_JudgePayload,
+            max_completion_tokens=getattr(self.provider, "judge_max_completion_tokens", 1000),
+        )
         citations = [item for item in payload.citations if item.chunk_id in allowed_ids]
         return JudgeReport(
             title=payload.title,
