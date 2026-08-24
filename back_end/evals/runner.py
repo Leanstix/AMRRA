@@ -12,7 +12,7 @@ from app.core.config import Settings
 from app.domain.schemas import RunRequest, SourceInput
 from app.factory import build_orchestrator
 from app.infrastructure.repository import RunRepository
-from app.providers.cohere import FakeProvider
+from app.providers.agentrouter import FakeProvider
 from app.services.ingestion import SourceIngestor
 from app.services.orchestrator import AgentOrchestrator
 
@@ -127,7 +127,7 @@ def main() -> None:
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Use the configured Cohere provider instead of fixtures",
+        help="Use GPT-5.6 Sol through the configured AgentRouter account instead of fixtures",
     )
     args = parser.parse_args()
     report = asyncio.run(run_evals(live=args.live))

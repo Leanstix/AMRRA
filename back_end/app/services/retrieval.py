@@ -90,7 +90,11 @@ class Retriever:
         shortlist_size = min(len(candidates), max(top_k * 3, top_k))
         shortlist = candidates[:shortlist_size]
 
-        if self.provider and len(shortlist) > 1:
+        if (
+            self.provider
+            and getattr(self.provider, "rerank_enabled", True)
+            and len(shortlist) > 1
+        ):
             system = (
                 "You are AMRRA's retrieval reranking agent. Score how directly each supplied evidence chunk helps "
                 "answer the research question. Use only supplied chunk_id values. Do not infer new facts, do not "

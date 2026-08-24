@@ -20,6 +20,7 @@ class AgentProviderError(RuntimeError):
 
 class AgentProvider(Protocol):
     model_name: str
+    rerank_enabled: bool
 
     async def structured(self, *, system: str, user: str, schema: type[T]) -> T: ...
 
@@ -30,6 +31,8 @@ class AgentRouterProvider:
     AMRRA calls AgentRouter directly over HTTP. No request is sent to api.openai.com,
     and provider responses are treated as untrusted until Pydantic validates them.
     """
+
+    rerank_enabled = True
 
     def __init__(self, settings: Settings):
         if not settings.agentrouter_api_key:
@@ -114,8 +117,14 @@ class FakeProvider:
 
     model_name = "fake-agent"
 
-    def __init__(self, structured_responses: list[Any] | None = None):
+    def __init__(
+        self,
+        structured_responses: list[Any] | None = None,
+        *,
+        rerank_enabled: bool = False,
+    ):
         self.responses = list(structured_responses or [])
+        self.rerank_enabled = rerank_enabled
 
     async def structured(self, *, system: str, user: str, schema: type[T]) -> T:
         if not self.responses:
