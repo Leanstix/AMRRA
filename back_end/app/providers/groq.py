@@ -14,15 +14,51 @@ from app.providers.base import AgentProviderError
 
 T = TypeVar("T", bound=BaseModel)
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+_SCHEMA_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
 _RETRYABLE_HTTP_STATUS = {408, 409, 425, 429}
+_DEPRECATED_MODEL_REPLACEMENTS = {
+    # Groq shut this model down for free/developer tiers on 2026-08-16.
+    "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+}
+
+
+def _strictify_schema(value: Any) -> Any:
+    """Convert Pydantic JSON Schema into Groq strict-mode compatible schema.
+
+    Groq strict structured outputs require every object property to be present in
+    `required` and every object to set `additionalProperties: false`. Optional
+    values remain nullable through Pydantic's `anyOf` representation; they are
+    simply required to be present as either their value or null.
+    """
+    if isinstance(value, list):
+        return [_strictify_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    result = {
+        key: _strictify_schema(item)
+        for key, item in value.items()
+        if key != "default"
+    }
+    properties = result.get("properties")
+    if isinstance(properties, dict):
+        result["required"] = list(properties.keys())
+        result["additionalProperties"] = False
+    return result
+
+
+def _schema_name(schema: type[BaseModel]) -> str:
+    name = _SCHEMA_NAME_RE.sub("_", schema.__name__).strip("_")
+    return (name or "amrra_response")[:64]
 
 
 class GroqProvider:
-    """Groq-backed OpenAI-compatible chat provider for all probabilistic AMRRA stages.
+    """Groq-backed OpenAI-compatible provider for AMRRA's probabilistic stages.
 
-    `llama-3.1-8b-instant` supports Groq JSON Object Mode. AMRRA still treats
-    every response as untrusted: the model is instructed with the target JSON
-    schema and Pydantic validates it before the payload enters application state.
+    AMRRA defaults to `openai/gpt-oss-20b`, Groq's production replacement for
+    the retired Llama 3.1 8B model. GPT-OSS supports strict JSON Schema mode;
+    model output is constrained by Groq and still validated again by Pydantic at
+    AMRRA's trust boundary.
     """
 
     rerank_enabled = True
@@ -39,7 +75,14 @@ class GroqProvider:
 
         self.api_key = api_key
         self.api_base = settings.llm_base_url.strip().rstrip("/")
-        self.model_name = settings.llm_model.strip()
+        self.requested_model_name = settings.llm_model.strip()
+        self.model_name = _DEPRECATED_MODEL_REPLACEMENTS.get(
+            self.requested_model_name,
+            self.requested_model_name,
+        )
+        self.model_migrated_from = (
+            self.requested_model_name if self.model_name != self.requested_model_name else None
+        )
         self.provider_name = "groq"
         self.timeout = settings.agent_timeout_seconds
         self.max_retries = settings.agent_max_retries
@@ -95,7 +138,7 @@ class GroqProvider:
         raise AgentProviderError("Groq response did not contain text content")
 
     async def check_connection(self) -> dict[str, Any]:
-        """Validate API authentication and model visibility without exposing the key."""
+        """Validate API authentication and effective model visibility safely."""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(f"{self.api_base}/models", headers=self.headers)
@@ -154,23 +197,28 @@ class GroqProvider:
         }
 
     async def structured(self, *, system: str, user: str, schema: type[T]) -> T:
-        schema_json = json.dumps(
-            schema.model_json_schema(), ensure_ascii=False, separators=(",", ":")
-        )
-        strict_system = (
-            f"{system}\n\n"
-            "You are operating as a JSON API. Return exactly one JSON object and no markdown or commentary. "
-            "The object must satisfy this JSON Schema exactly. If evidence is insufficient, represent that "
-            "honestly using the schema rather than inventing facts.\n"
-            f"JSON Schema:\n{schema_json}"
-        )
+        strict_schema = _strictify_schema(schema.model_json_schema())
         payload = {
             "model": self.model_name,
             "messages": [
-                {"role": "system", "content": strict_system},
+                {
+                    "role": "system",
+                    "content": (
+                        f"{system}\n\n"
+                        "Return only the requested structured object. Never invent evidence or values. "
+                        "If evidence is insufficient, encode that honestly in the provided fields."
+                    ),
+                },
                 {"role": "user", "content": user},
             ],
-            "response_format": {"type": "json_object"},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": _schema_name(schema),
+                    "strict": True,
+                    "schema": strict_schema,
+                },
+            },
             "temperature": 0,
             "max_completion_tokens": self.max_completion_tokens,
         }
