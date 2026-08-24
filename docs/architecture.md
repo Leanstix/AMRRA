@@ -56,6 +56,10 @@ The backend sends OpenAI-compatible `POST /chat/completions` requests to `LLM_BA
 
 The provider fails configuration if a different provider or API style is supplied, which prevents an accidental silent provider switch.
 
+Strict JSON Schema is the preferred output path. AMRRA still treats Groq as an external probabilistic service rather than assuming its strict-generation implementation can never fail. If Groq returns its provider-side `400 Generated JSON does not match the expected schema` / `failed_generation` error, the provider performs one compatibility recovery using JSON Object Mode for that same typed request. The returned JSON is then validated locally by the original Pydantic model before it can cross the trust boundary. A locally invalid recovery response is repaired only within the configured retry budget; it is never accepted as trusted state.
+
+This fallback is transport-level compatibility handling, not a second LLM/provider fallback: the model and Groq endpoint remain unchanged. Unrelated HTTP 400 errors remain permanent failures and are not retried blindly.
+
 Permanent authorization/request/model failures fail fast. Retryable transport, rate-limit and server failures use bounded backoff; Groq `retry-after` is honored for rate limits, and TPM-specific 413 responses can reduce the output reservation before retrying. API keys are redacted from surfaced provider errors, and diagnostics expose only a SHA-256 fingerprint for configuration comparison.
 
 ### 8. Observability
