@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from app.core.config import Settings, get_settings
 from app.infrastructure.repository import RunRepository
-from app.providers.cohere import CohereProvider
+from app.providers.agentrouter import AgentRouterProvider
 from app.services.ingestion import SourceIngestor
 from app.services.orchestrator import AgentOrchestrator
 
@@ -20,9 +20,7 @@ def build_orchestrator(
 ) -> AgentOrchestrator:
     settings = settings or get_settings()
     repository = repository or get_repository()
-    if settings.agent_provider != "cohere":
-        raise RuntimeError(f"unsupported production agent provider: {settings.agent_provider}")
-    provider = CohereProvider(settings)
+    provider = AgentRouterProvider(settings)
     return AgentOrchestrator(
         repository=repository,
         provider=provider,

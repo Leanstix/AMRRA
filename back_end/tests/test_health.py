@@ -15,7 +15,7 @@ def test_health_is_ok_when_db_and_provider_are_ready(monkeypatch):
     monkeypatch.setattr(
         health_module,
         "get_settings",
-        lambda: Settings(environment="test", COHERE_API_KEY="key"),
+        lambda: Settings(environment="test", AGENTROUTER_API_KEY="key"),
     )
     result = health_module.health()
     assert result.status == "ok"
@@ -27,6 +27,6 @@ def test_health_is_degraded_without_provider_key(monkeypatch):
     monkeypatch.setattr(
         health_module,
         "get_settings",
-        lambda: Settings(environment="test", COHERE_API_KEY=None),
+        lambda: Settings(environment="test", AGENTROUTER_API_KEY=None),
     )
     assert health_module.health().status == "degraded"

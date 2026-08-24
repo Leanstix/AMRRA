@@ -4,12 +4,12 @@ import asyncio
 
 from app.domain.schemas import RunRequest, RunStatus, StageName
 from app.infrastructure.repository import RunRepository
-from app.providers.cohere import AgentProvider
+from app.providers.agentrouter import AgentProvider
 from app.services.agents import EXTRACTOR_PROMPT_VERSION, JUDGE_PROMPT_VERSION, ExtractorAgent, JudgeAgent
 from app.services.ingestion import SourceIngestor
 from app.services.observability import TraceManager
 from app.services.planning import ExperimentPlanner
-from app.services.retrieval import Retriever
+from app.services.retrieval import RETRIEVER_PROMPT_VERSION, Retriever
 from app.services.statistics import StatisticalToolbox
 
 
@@ -54,14 +54,18 @@ class AgentOrchestrator:
                 run_id,
                 StageName.RETRIEVAL,
                 input_data={"query": request.query, "sources": trace["output"]},
-                model=getattr(self.provider, "model_name", None),
+                model=self.provider.model_name,
+                prompt_version=RETRIEVER_PROMPT_VERSION,
             ) as retrieval_trace:
                 evidence = await self.retriever.retrieve(request.query, sources, request.top_k)
                 if not evidence:
                     raise PipelineError("INSUFFICIENT_EVIDENCE", "No readable evidence chunks were retrieved")
                 self.repository.patch_state(run_id, evidence=[item.model_dump(mode="json") for item in evidence])
                 retrieval_trace["output"] = [item.model_dump(mode="json") for item in evidence]
-                retrieval_trace["metadata"] = {"chunks": len(evidence)}
+                retrieval_trace["metadata"] = {
+                    "chunks": len(evidence),
+                    "reranked": sum("agent_relevance" in item.metadata for item in evidence),
+                }
 
             with self.traces.stage(
                 run_id,

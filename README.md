@@ -9,16 +9,18 @@ AMRRA is an agentic research system that turns a research question and source ev
 ```text
 Source ingestion
     ↓
-Retriever (lexical + optional Cohere semantic ranking)
+Retriever (lexical shortlist + GPT-5.6 Sol semantic reranking)
     ↓
-Extractor Agent (schema-constrained evidence + hypotheses)
+Extractor Agent (GPT-5.6 Sol, schema-validated evidence + hypotheses)
     ↓
-Experiment Planner (tool precondition checks)
+Experiment Planner (deterministic tool precondition checks)
     ↓
 Deterministic Statistical Toolbox
     ↓
-Judge Agent (evidence-cited synthesis)
+Judge Agent (GPT-5.6 Sol, evidence-cited synthesis)
 ```
+
+GPT-5.6 Sol is the **only production LLM**. All model traffic is sent through AgentRouter's OpenAI-compatible API; AMRRA does not contact OpenAI directly and does not fall back to a second model. If AgentRouter reranking is temporarily unavailable, retrieval degrades to deterministic lexical ranking, while extraction/judging fail explicitly rather than silently switching providers.
 
 Every stage writes a durable trace containing status, latency, model/prompt version, input/output hashes, errors and tool metadata. Model outputs are treated as untrusted until Pydantic validates them.
 
@@ -39,12 +41,11 @@ Supported deterministic tools currently include:
 - **FastAPI**: run creation, PDF ingestion, status and health endpoints
 - **PostgreSQL**: durable run state and stage traces
 - **Redis + Celery**: production job dispatch and worker isolation
-- **Cohere Chat API v2**: structured Extractor and Judge agents
-- **Cohere Embed API v2**: optional semantic retrieval score
-- **Next.js**: real workbench wired to the run API
+- **AgentRouter OpenAI-compatible API**: GPT-5.6 Sol retrieval reranking, extraction and judging
+- **Next.js 14**: real workbench wired to the run API
 - **Alembic**: database migrations
 - **Docker Compose**: reproducible local production topology
-- **GitHub Actions**: backend coverage and frontend build/test gates
+- **GitHub Actions**: backend coverage, agent evals and frontend build/test gates
 
 ## Quick start
 
@@ -54,7 +55,15 @@ Supported deterministic tools currently include:
 cp .env.example .env
 ```
 
-2. Set `COHERE_API_KEY`.
+2. Set your AgentRouter key:
+
+```bash
+AGENTROUTER_API_KEY=...
+AGENTROUTER_BASE_URL=https://co.agentrouter.org/v1
+AGENTROUTER_MODEL=gpt-5.6-sol
+```
+
+AgentRouter model availability is account/resource-pool specific. If the model page for your key shows a suffixed or alternate GPT-5.6 Sol ID, use that exact value for `AGENTROUTER_MODEL`.
 
 3. Start the production-shaped stack:
 
@@ -75,7 +84,8 @@ cd back_end
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-export COHERE_API_KEY=...
+export AGENTROUTER_API_KEY=...
+export AGENTROUTER_MODEL=gpt-5.6-sol
 uvicorn main:app --reload
 ```
 
@@ -85,6 +95,12 @@ Run tests:
 
 ```bash
 PYTHONPATH=. pytest --cov=app --cov-report=term-missing --cov-fail-under=85 -q
+```
+
+Run the live agent-quality suite against AgentRouter:
+
+```bash
+PYTHONPATH=. python -m evals.runner --live
 ```
 
 ## API
@@ -97,7 +113,7 @@ PYTHONPATH=. pytest --cov=app --cov-report=term-missing --cov-fail-under=85 -q
 - `file` — optional PDF, maximum 10 MB
 - `url` — optional public HTTP(S) source URL
 - `text` — optional pasted source text
-- `top_k` — number of evidence chunks to send to the extractor
+- `top_k` — number of evidence chunks retained after retrieval/reranking
 
 At least one source is required. Production returns `202 Accepted`; the client polls the durable run resource.
 
@@ -111,8 +127,9 @@ At least one source is required. Production returns `202 Accepted`; the client p
 - Remote source size and redirect depth are bounded.
 - PDF MIME/type, byte size and page count are bounded.
 - CORS is explicit and environment-controlled.
+- AgentRouter credentials are environment-only and are never exposed to the frontend.
 - Agent provider errors are typed run failures; the system never inserts fake hypotheses to keep the pipeline alive.
 
 ## Test strategy
 
-Tests cover schema invariants, planner tool-selection rules, statistical branches, hallucinated citation filtering, provider schema validation, SSRF controls, persistence, failed traces, API validation and a full end-to-end agent run using a deterministic fake provider. The fake provider exists only for tests; production configuration accepts the Cohere provider.
+Tests cover schema invariants, GPT reranking constraints/fallback, planner tool-selection rules, statistical branches, hallucinated citation filtering, AgentRouter response validation, SSRF controls, persistence, failed traces, API validation and a full end-to-end agent run using a deterministic fake provider. The fake provider exists only for tests/offline evals; production has one provider: GPT-5.6 Sol through AgentRouter.
