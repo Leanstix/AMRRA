@@ -9,15 +9,15 @@ const dmSans = DM_Sans({
 })
 
 export const metadata = {
-  title: "AI Research Reproducibility Copilot",
-  description: "Extract hypotheses, generate experiment plans, and create reproducibility reports from ML papers",
-  generator: "v0.app",
+  title: "AMRRA — Agentic Research Workbench",
+  description: "Evidence-grounded agentic research with deterministic statistical validation.",
+  generator: "AMRRA",
 }
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className={`${dmSans.variable} antialiased`}>
-      <body className="font-serif">
+      <body className="font-sans">
         <SettingsProvider>{children}</SettingsProvider>
       </body>
     </html>
