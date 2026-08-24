@@ -6,6 +6,9 @@ import app.providers.diagnostics as diagnostics_module
 from app.core.config import Settings
 
 
+EXPECTED_MODEL = "openai/gpt-oss-20b"
+
+
 class FakeProvider:
     provider_name = "groq"
 
@@ -31,7 +34,11 @@ async def test_diagnose_returns_safe_provider_state(monkeypatch):
     monkeypatch.setattr(
         diagnostics_module,
         "get_settings",
-        lambda: Settings(environment="test", LLM_API_KEY="secret"),
+        lambda: Settings(
+            environment="test",
+            LLM_API_KEY="secret",
+            LLM_MODEL=EXPECTED_MODEL,
+        ),
     )
     monkeypatch.setattr(diagnostics_module, "GroqProvider", FakeProvider)
 
@@ -39,8 +46,8 @@ async def test_diagnose_returns_safe_provider_state(monkeypatch):
 
     assert result["provider"] == "groq"
     assert result["api_style"] == "openai_chat"
-    assert result["requested_model"] == "openai/gpt-oss-20b"
-    assert result["model"] == "openai/gpt-oss-20b"
+    assert result["requested_model"] == EXPECTED_MODEL
+    assert result["model"] == EXPECTED_MODEL
     assert result["model_migrated_from"] is None
     assert result["authenticated"] is True
     assert result["model_available"] is True
@@ -53,12 +60,16 @@ async def test_diagnose_reports_missing_configuration(monkeypatch):
     monkeypatch.setattr(
         diagnostics_module,
         "get_settings",
-        lambda: Settings(environment="test", LLM_API_KEY=None),
+        lambda: Settings(
+            environment="test",
+            LLM_API_KEY=None,
+            LLM_MODEL=EXPECTED_MODEL,
+        ),
     )
 
     result = await diagnostics_module.diagnose()
 
     assert result["configured"] is False
     assert result["provider"] == "groq"
-    assert result["requested_model"] == "openai/gpt-oss-20b"
+    assert result["requested_model"] == EXPECTED_MODEL
     assert "LLM_API_KEY" in result["error"]
